@@ -156,7 +156,7 @@ struct WorkScreen: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 TextField("Refine the proposal…", text: $refine).textFieldStyle(.plain).font(LX.F.body)
-                HStack { Text("@file  /test").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary); Spacer(); Keycap(text: "⌘↩") }
+                HStack { Text("@file  /test").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary); Spacer() }
             }
             .padding(.horizontal, 12).padding(.top, 11).padding(.bottom, 6)
             .well(radius: LX.R.lg, fill: Color(hex: 0x080910, alpha: 0.6))

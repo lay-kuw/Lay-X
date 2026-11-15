@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct SettingsScreen: View {
@@ -83,7 +84,7 @@ struct SettingsScreen: View {
             }
             HStack(spacing: 10) {
                 Image(systemName: "slider.horizontal.3").foregroundStyle(LX.C.accentText)
-                Text("Changes apply instantly to every window. Shortcut: ⌥⌘T opens this page.")
+                Text("Changes apply instantly to every window.")
                     .font(LX.F.ui(12)).foregroundStyle(Color(hex: 0xC9CBD6))
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
@@ -122,11 +123,28 @@ struct SettingsScreen: View {
     private var inferencePage: some View {
                 VStack(alignment: .leading, spacing: 22) {
                     group("Default model") {
-                        row("Chat & Mini Chat", "Used for new chats and ⌥Space") { menu($defaultChat, modelOptions) }
+                        row("Chat & Mini Chat", "Used for new chats and Mini Chat") { menu($defaultChat, modelOptions) }
                         row("Work", "Larger context for multi-file edits") { menu($defaultWork, modelOptions) }
                         row("Keep model loaded", "Unload after a period of inactivity to free memory") {
                             menu($keepLoaded, ["5 minutes", "15 minutes", "1 hour", "Always"], width: 140)
                         }
+                    }
+                    group("Storage") {
+                        row("Model storage", storageHelp) {
+                            HStack(spacing: 8) {
+                                Text((AppServices.shared.models.store.root.path as NSString).abbreviatingWithTildeInPath)
+                                    .font(LX.F.mono(11.5)).foregroundStyle(LX.C.accentText)
+                                    .lineLimit(1).truncationMode(.middle).frame(maxWidth: 260, alignment: .trailing)
+                                    .help(AppServices.shared.models.store.root.path)
+                                LXButton(title: "Choose…") { chooseStorage() }
+                                if !AppServices.shared.models.isDefaultStorage {
+                                    LXButton(title: "Default") { storageError = AppServices.shared.models.changeStorage(to: nil) }
+                                }
+                            }
+                        }
+                    }
+                    if let storageError {
+                        Text(storageError).font(LX.F.caption).foregroundStyle(LX.C.error)
                     }
                     group("Memory") {
                         row("GPU memory limit", "Upper bound for weights + KV cache (wired memory)") {
@@ -160,6 +178,26 @@ struct SettingsScreen: View {
                     .background(RoundedRectangle(cornerRadius: LX.R.lg).fill(LX.C.accent.opacity(0.06)))
                     .overlay(RoundedRectangle(cornerRadius: LX.R.lg).strokeBorder(LX.C.accent.opacity(0.16), lineWidth: 1))
                 }
+    }
+
+    @State private var storageError: String?
+
+    private var storageHelp: String {
+        "Where downloaded models are kept. Existing models stay in the old folder."
+    }
+
+    private func chooseStorage() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Use for Models"
+        panel.message = "Choose a folder for Lay X models. If it isn’t empty, a “Lay X Models” folder is created inside it."
+        panel.directoryURL = AppServices.shared.models.store.root
+        if panel.runModal() == .OK, let url = panel.url {
+            storageError = AppServices.shared.models.changeStorage(to: url)
+        }
     }
 
     private func group<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {

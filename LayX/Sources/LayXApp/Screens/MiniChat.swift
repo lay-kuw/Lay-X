@@ -139,9 +139,7 @@ struct MiniChatView: View {
                     .onSubmit { model.submit() }
                 if model.phase == .generating {
                     Text("47.9 tok/s").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan)
-                } else if model.phase == .idle {
-                    Keycap(text: "↵")
-                } else {
+                } else if model.phase != .idle {
                     contextChip
                 }
             }
@@ -237,9 +235,9 @@ struct MiniChatView: View {
 
     private func footerAction(_ title: String, _ key: String, emphasized: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 7) { Text(title); Keycap(text: key) }
+            Text(title)
                 .font(LX.F.ui(12)).foregroundStyle(LX.C.body)
-                .padding(.leading, 8).padding(.trailing, 5).frame(height: 26)
+                .padding(.horizontal, 8).frame(height: 26)
                 .background(RoundedRectangle(cornerRadius: LX.R.sm).fill(Color.white.opacity(emphasized ? 0.06 : 0)))
         }
         .buttonStyle(.plain)

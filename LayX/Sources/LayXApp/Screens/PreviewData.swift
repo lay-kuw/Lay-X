@@ -184,32 +184,6 @@ extension Mock {
     ]
 }
 
-// MARK: - Models
-
-struct LocalModel: Identifiable, Hashable {
-    let id = UUID()
-    var name: String
-    var repo: String
-    var params: String
-    var quant: String
-    var size: String
-    var context: String
-    var tps: Double
-    var used: String
-    var loaded: Bool
-}
-
-extension Mock {
-    static let models: [LocalModel] = [
-        LocalModel(name: "Qwen3 14B", repo: "mlx-community/Qwen3-14B-4bit", params: "14B", quant: "4-bit", size: "8.3 GB", context: "32k", tps: 48.6, used: "now", loaded: true),
-        LocalModel(name: "Qwen3 30B-A3B", repo: "mlx-community/Qwen3-30B-A3B-4bit", params: "30B MoE", quant: "4-bit", size: "17.2 GB", context: "32k", tps: 71.3, used: "2h", loaded: false),
-        LocalModel(name: "Llama 3.3 70B", repo: "mlx-community/Llama-3.3-70B-Instruct-4bit", params: "70B", quant: "4-bit", size: "39.7 GB", context: "128k", tps: 11.8, used: "3d", loaded: false),
-        LocalModel(name: "Gemma 3 27B", repo: "mlx-community/gemma-3-27b-it-4bit", params: "27B", quant: "4-bit", size: "15.6 GB", context: "128k", tps: 24.9, used: "1w", loaded: false),
-        LocalModel(name: "Mistral Small 3.2", repo: "mlx-community/Mistral-Small-3.2-24B-4bit", params: "24B", quant: "4-bit", size: "13.3 GB", context: "128k", tps: 28.4, used: "2w", loaded: false),
-        LocalModel(name: "Phi-4 mini", repo: "mlx-community/Phi-4-mini-instruct-8bit", params: "3.8B", quant: "8-bit", size: "4.1 GB", context: "128k", tps: 112.0, used: "1mo", loaded: false),
-    ]
-}
-
 // MARK: - Performance
 
 struct SweepPoint: Identifiable {

@@ -1,0 +1,253 @@
+import Foundation
+import LayXCore
+
+/// MainActor state for the Models screen and every model picker (Chat, Mini Chat, Settings).
+/// Wraps `ModelStore` (disk), `ModelDownloader` (network) and the shared `InferenceCoordinator` (memory).
+@MainActor
+@Observable
+final class ModelLibrary {
+    private(set) var installed: [InstalledModel] = []
+    private(set) var incomplete: [(id: ModelRepoID, bytes: Int64)] = []
+    private(set) var downloads: [ModelRepoID: DownloadState] = [:]
+    private(set) var searchResults: [HubModelSummary] = []
+    private(set) var compatibility: [ModelRepoID: ModelCompatibility] = [:]
+    private(set) var isSearching = false
+    private(set) var searchError: String?
+    private(set) var storageUsed: Int64 = 0
+    private(set) var storageFree: Int64 = 0
+    /// Most recent user-visible error or confirmation (shown as a toast).
+    var notice: String?
+
+    private(set) var store: ModelStore
+    @ObservationIgnored private var downloader: ModelDownloader
+    @ObservationIgnored private let hub = HubAPI()
+    @ObservationIgnored private let coordinator: InferenceCoordinator
+    @ObservationIgnored private let architectures: any ModelArchitectureSupport
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var watchTask: Task<Void, Never>?
+
+    static let lastUsedKey = "lx.modelLastUsed"
+
+    init(store: ModelStore, coordinator: InferenceCoordinator, architectures: any ModelArchitectureSupport) {
+        self.store = store
+        self.coordinator = coordinator
+        self.architectures = architectures
+        downloader = ModelDownloader(store: store, architectures: architectures)
+        refresh()
+        watchDownloads()
+    }
+
+    private func watchDownloads() {
+        watchTask?.cancel()
+        watchTask = Task { [weak self, downloader] in
+            for await states in await downloader.updates() {
+                guard let self else { return }
+                let finished = states.contains { id, s in s == .completed && self.downloads[id] != .completed }
+                self.downloads = states
+                if finished { self.refresh() }
+            }
+        }
+    }
+
+    // MARK: Storage location
+
+    /// Switches the model directory. Models in the previous location are left untouched (switch back to use
+    /// them). Refused while a download is running. The loaded model, if any, stays loaded (it is in memory).
+    /// Returns an error message, or nil on success.
+    func changeStorage(to chosen: URL?) -> String? {
+        guard activeDownloads.isEmpty else { return "Wait for downloads to finish (or pause them) before moving storage." }
+        let root: URL
+        if let chosen {
+            guard let r = try? ModelStore.root(forChosenFolder: chosen) else { return "That folder can’t be used for models." }
+            root = r
+            UserDefaults.standard.set(root.path, forKey: AppServices.modelStorePathKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: AppServices.modelStorePathKey)
+            guard let r = try? ModelStore.defaultRoot() else { return "The default folder isn’t available." }
+            root = r
+        }
+        store = ModelStore(root: root)
+        downloader = ModelDownloader(store: store, architectures: architectures)
+        downloads = [:]
+        watchDownloads()
+        refresh()
+        notice = "Models are now stored in \((root.path as NSString).abbreviatingWithTildeInPath)."
+        return nil
+    }
+
+    var isDefaultStorage: Bool { UserDefaults.standard.string(forKey: AppServices.modelStorePathKey) == nil }
+
+    // MARK: Disk
+
+    func refresh() {
+        let store = self.store
+        Task.detached(priority: .userInitiated) {
+            let installed = store.installedModels()
+            let incomplete = store.incompleteDownloads()
+            let used = store.totalUsage()
+            let free = store.availableCapacity()
+            await MainActor.run {
+                self.installed = installed
+                self.incomplete = incomplete
+                self.storageUsed = used
+                self.storageFree = free
+            }
+        }
+    }
+
+    func model(_ id: String) -> InstalledModel? { installed.first { $0.id.description == id } }
+
+    // MARK: Discovery
+
+    func search(_ query: String) {
+        searchTask?.cancel()
+        isSearching = true
+        searchError = nil
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(250))  // debounce typing
+            guard !Task.isCancelled else { return }
+            do {
+                let results = try await hub.search(query).filter(\.isMLXLanguageModelRepo)
+                guard !Task.isCancelled else { return }
+                var compat: [ModelRepoID: ModelCompatibility] = [:]
+                for r in results {
+                    if let type = r.modelType {
+                        compat[r.id] = await architectures.supports(modelType: type) ? .compatible : .unsupportedArchitecture(type)
+                    } else {
+                        compat[r.id] = .unknown
+                    }
+                }
+                searchResults = results
+                compatibility.merge(compat) { $1 }
+            } catch is CancellationError {
+                return
+            } catch {
+                searchError = (error as? LocalizedError)?.errorDescription ?? "Search failed."
+            }
+            isSearching = false
+        }
+    }
+
+    // MARK: Downloads
+
+    func download(_ id: ModelRepoID) {
+        Task {
+            do {
+                try await downloader.download(id)
+                notice = "\(ModelDisplay.name(id)) is ready."
+            } catch is CancellationError {
+                refresh()
+            } catch {
+                notice = (error as? LocalizedError)?.errorDescription ?? "Download failed."
+                refresh()
+            }
+        }
+    }
+
+    func cancelDownload(_ id: ModelRepoID) {
+        Task { await downloader.cancel(id) }
+    }
+
+    func discardPartial(_ id: ModelRepoID) {
+        Task {
+            await downloader.discardPartial(id)
+            refresh()
+        }
+    }
+
+    var activeDownloads: [(id: ModelRepoID, progress: DownloadProgress)] {
+        downloads.compactMap { id, s in if case .active(let p) = s { (id, p) } else { nil } }.sorted { $0.id < $1.id }
+    }
+
+    // MARK: Lifecycle
+
+    func load(_ model: InstalledModel) {
+        Task {
+            do {
+                try await coordinator.load(model.reference)
+                var used = UserDefaults.standard.dictionary(forKey: Self.lastUsedKey) as? [String: Double] ?? [:]
+                used[model.id.description] = Date().timeIntervalSince1970
+                UserDefaults.standard.set(used, forKey: Self.lastUsedKey)
+            } catch {
+                notice = (error as? LocalizedError)?.errorDescription ?? "The model couldn’t be loaded."
+            }
+        }
+    }
+
+    func unload() {
+        Task { await coordinator.unload() }
+    }
+
+    func delete(_ id: ModelRepoID, loadedID: String?) {
+        do {
+            try store.delete(id, inUse: Set([loadedID].compactMap { $0 }))
+            Task { await downloader.clearFinishedState(id) }
+            notice = "Deleted \(ModelDisplay.name(id))."
+        } catch {
+            notice = (error as? LocalizedError)?.errorDescription ?? "The model couldn’t be deleted."
+        }
+        refresh()
+    }
+
+    func lastUsed(_ id: ModelRepoID) -> Date? {
+        (UserDefaults.standard.dictionary(forKey: Self.lastUsedKey) as? [String: Double])?[id.description]
+            .map(Date.init(timeIntervalSince1970:))
+    }
+}
+
+/// Human-readable labels derived from repository names, e.g. `Qwen3-30B-A3B-4bit` → "Qwen3 30B-A3B".
+enum ModelDisplay {
+    static func name(_ id: ModelRepoID) -> String {
+        var n = id.name
+        for suffix in ["-4bit", "-8bit", "-6bit", "-3bit", "-5bit", "-bf16", "-fp16", "-MLX", "-mlx", "-DWQ", "-qat"] {
+            if let r = n.range(of: suffix, options: [.caseInsensitive, .backwards]) { n.removeSubrange(r.lowerBound...) ; break }
+        }
+        n = n.replacingOccurrences(of: "-Instruct", with: "").replacingOccurrences(of: "-it", with: "")
+        // Keep MoE "30B-A3B" together, space elsewhere.
+        var parts = n.split(separator: "-").map(String.init)
+        var merged: [String] = []
+        while !parts.isEmpty {
+            let p = parts.removeFirst()
+            if let next = parts.first, next.range(of: #"^A\d+(\.\d+)?B$"#, options: .regularExpression) != nil {
+                merged.append("\(p)-\(next)")
+                parts.removeFirst()
+            } else {
+                merged.append(p)
+            }
+        }
+        return merged.joined(separator: " ")
+    }
+
+    /// Parameter size parsed from the name ("0.6B", "30B MoE"); nil when not stated.
+    static func parameters(_ id: ModelRepoID) -> String? {
+        let n = id.name
+        guard let r = n.range(of: #"(?<![A-Za-z0-9.])\d+(\.\d+)?[BM](?![A-Za-z])"#, options: .regularExpression) else { return nil }
+        let size = String(n[r])
+        return n.range(of: #"-A\d+(\.\d+)?B"#, options: .regularExpression) != nil ? "\(size) MoE" : size
+    }
+
+    static func quant(bits: Int?) -> String { bits.map { "\($0)-bit" } ?? "—" }
+
+    static func context(_ tokens: Int?) -> String {
+        guard let t = tokens else { return "—" }
+        return t >= 1024 ? "\(Int((Double(t) / 1024).rounded()))k" : "\(t)"
+    }
+
+    static func bytes(_ b: Int64) -> String {
+        let gb = Double(b) / 1_000_000_000
+        return gb >= 1 ? String(format: "%.1f GB", gb) : String(format: "%.0f MB", Double(b) / 1_000_000)
+    }
+
+    static func age(_ date: Date?, now: Date = Date()) -> String {
+        guard let date else { return "—" }
+        let s = now.timeIntervalSince(date)
+        switch s {
+        case ..<60: return "now"
+        case ..<3600: return "\(Int(s / 60))m"
+        case ..<86400: return "\(Int(s / 3600))h"
+        case ..<(86400 * 7): return "\(Int(s / 86400))d"
+        case ..<(86400 * 30): return "\(Int(s / (86400 * 7)))w"
+        default: return "\(Int(s / (86400 * 30)))mo"
+        }
+    }
+}

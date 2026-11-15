@@ -1,0 +1,202 @@
+import Foundation
+
+/// The application-managed model directory. Every file operation is confined to `root`:
+/// paths are built only from validated `ModelRepoID`s and validated relative file paths, and are re-checked
+/// after symlink resolution before anything is written or deleted.
+///
+/// Layout: `<root>/<owner>/<name>/{config.json, *.safetensors, …, .layx-manifest.json}`;
+/// in-progress downloads live in `<root>/<owner>/<name>/.partial/`.
+public struct ModelStore: Sendable {
+    public let root: URL
+
+    public init(root: URL) {
+        self.root = root.standardizedFileURL
+    }
+
+    /// `~/Library/Application Support/Lay X/Models`
+    public static func defaultRoot() throws -> URL {
+        let base = try FileManager.default.url(
+            for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        return base.appendingPathComponent("Lay X", isDirectory: true).appendingPathComponent("Models", isDirectory: true)
+    }
+
+    public static let partialDirectoryName = ".partial"
+    public static let storeMarker = ".layx-store"
+
+    /// Turns a user-chosen folder into a store root. The folder is used directly when it is empty or already a
+    /// Lay X store; otherwise a "Lay X Models" subfolder is created, so Lay X never mixes its files with the
+    /// user's. A marker file identifies the folder as a Lay X store.
+    public static func root(forChosenFolder chosen: URL) throws -> URL {
+        let fm = FileManager.default
+        let chosen = chosen.standardizedFileURL
+        let contents = try fm.contentsOfDirectory(atPath: chosen.path).filter { $0 != ".DS_Store" }
+        let root = (contents.isEmpty || contents.contains(storeMarker))
+            ? chosen : chosen.appendingPathComponent("Lay X Models", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let marker = root.appendingPathComponent(storeMarker)
+        if !fm.fileExists(atPath: marker.path) {
+            try Data("Lay X model storage. Lay X only creates and deletes files in owner/name folders here.\n".utf8)
+                .write(to: marker)
+        }
+        guard fm.isWritableFile(atPath: root.path) else { throw CocoaError(.fileWriteNoPermission) }
+        return root
+    }
+
+    // MARK: Paths
+
+    public func directory(for id: ModelRepoID) -> URL {
+        root.appendingPathComponent(id.owner, isDirectory: true).appendingPathComponent(id.name, isDirectory: true)
+    }
+
+    public func partialDirectory(for id: ModelRepoID) -> URL {
+        directory(for: id).appendingPathComponent(Self.partialDirectoryName, isDirectory: true)
+    }
+
+    /// Validates a repository-relative file path (from the Hub tree) and returns its URL under `base`.
+    /// Allows nested directories, rejects absolute paths, `.`/`..`, hidden components and control characters.
+    public static func safeChild(of base: URL, relativePath: String) throws -> URL {
+        guard !relativePath.isEmpty, relativePath.count < 512, !relativePath.hasPrefix("/"),
+              !relativePath.contains("\\"), !relativePath.contains("\0")
+        else { throw ModelStoreError.unsafePath(relativePath) }
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        for c in components {
+            guard !c.isEmpty, c != ".", c != "..", !c.hasPrefix("."),
+                  c.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+            else { throw ModelStoreError.unsafePath(relativePath) }
+        }
+        let url = base.appendingPathComponent(relativePath).standardizedFileURL
+        guard isContained(url, in: base) else { throw ModelStoreError.unsafePath(relativePath) }
+        return url
+    }
+
+    /// True if `url` (after resolving symlinks of its existing ancestors) lies strictly inside `base`.
+    public static func isContained(_ url: URL, in base: URL) -> Bool {
+        let b = canonicalPath(base)
+        let u = canonicalPath(url)
+        let prefix = b.hasSuffix("/") ? b : b + "/"
+        return u.hasPrefix(prefix)
+    }
+
+    /// Resolves symlinks in the deepest *existing* ancestor and re-appends the remaining components.
+    /// (`URL.resolvingSymlinksInPath()` leaves a path untouched when its final component doesn't exist yet,
+    /// which would let a not-yet-created file escape through a symlinked parent directory.)
+    public static func canonicalPath(_ url: URL) -> String {
+        var existing = url.standardizedFileURL
+        var remainder: [String] = []
+        let fm = FileManager.default
+        while !fm.fileExists(atPath: existing.path), existing.path != "/" {
+            remainder.insert(existing.lastPathComponent, at: 0)
+            existing = existing.deletingLastPathComponent()
+        }
+        var resolved = existing.resolvingSymlinksInPath()
+        for component in remainder { resolved.appendPathComponent(component) }
+        return resolved.standardizedFileURL.path
+    }
+
+    // MARK: Queries
+
+    /// Fully downloaded models (those with a manifest).
+    public func installedModels() -> [InstalledModel] {
+        let fm = FileManager.default
+        guard let owners = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return [] }
+        var result: [InstalledModel] = []
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        for owner in owners where ModelRepoID.isValidComponent(owner.lastPathComponent) {
+            guard let names = try? fm.contentsOfDirectory(at: owner, includingPropertiesForKeys: nil) else { continue }
+            for dir in names {
+                guard let id = ModelRepoID("\(owner.lastPathComponent)/\(dir.lastPathComponent)"),
+                      let data = try? Data(contentsOf: dir.appendingPathComponent(InstalledModelManifest.fileName)),
+                      let manifest = try? decoder.decode(InstalledModelManifest.self, from: data),
+                      manifest.id == id
+                else { continue }
+                result.append(InstalledModel(manifest: manifest, directory: directory(for: id),
+                                             diskBytes: Self.allocatedSize(of: dir)))
+            }
+        }
+        return result.sorted { $0.id < $1.id }
+    }
+
+    public func installedModel(_ id: ModelRepoID) -> InstalledModel? {
+        installedModels().first { $0.id == id }
+    }
+
+    /// Models with a `.partial` directory and no manifest (interrupted downloads that can be resumed).
+    public func incompleteDownloads() -> [(id: ModelRepoID, bytes: Int64)] {
+        let fm = FileManager.default
+        guard let owners = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return [] }
+        var out: [(ModelRepoID, Int64)] = []
+        for owner in owners {
+            for dir in (try? fm.contentsOfDirectory(at: owner, includingPropertiesForKeys: nil)) ?? [] {
+                guard let id = ModelRepoID("\(owner.lastPathComponent)/\(dir.lastPathComponent)") else { continue }
+                let partial = partialDirectory(for: id)
+                let hasManifest = fm.fileExists(atPath: dir.appendingPathComponent(InstalledModelManifest.fileName).path)
+                if !hasManifest, fm.fileExists(atPath: partial.path) {
+                    out.append((id, Self.allocatedSize(of: partial)))
+                }
+            }
+        }
+        return out
+    }
+
+    /// Bytes used by everything under `root`.
+    public func totalUsage() -> Int64 { Self.allocatedSize(of: root) }
+
+    public func availableCapacity() -> Int64 {
+        let probe = FileManager.default.fileExists(atPath: root.path) ? root : root.deletingLastPathComponent()
+        let values = try? probe.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values?.volumeAvailableCapacityForImportantUsage ?? 0
+    }
+
+    // MARK: Mutations
+
+    /// Deletes an installed or partially downloaded model. Refuses ids in `inUse` (the loaded model).
+    public func delete(_ id: ModelRepoID, inUse: Set<String>) throws {
+        guard !inUse.contains(id.description) else { throw ModelStoreError.inUse(id.description) }
+        let dir = directory(for: id)
+        guard Self.isContained(dir, in: root) else { throw ModelStoreError.unsafePath(id.description) }
+        // Refuse if the model directory itself is a symlink (could point outside the store).
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: dir.path),
+           attrs[.type] as? FileAttributeType == .typeSymbolicLink {
+            throw ModelStoreError.unsafePath(id.description)
+        }
+        guard FileManager.default.fileExists(atPath: dir.path) else { throw ModelStoreError.notInstalled(id.description) }
+        try FileManager.default.removeItem(at: dir)
+        // Remove the owner directory if it became empty.
+        let owner = dir.deletingLastPathComponent()
+        if (try? FileManager.default.contentsOfDirectory(atPath: owner.path))?.isEmpty == true {
+            try? FileManager.default.removeItem(at: owner)
+        }
+    }
+
+    // MARK: Helpers
+
+    static func allocatedSize(of url: URL) -> Int64 {
+        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .isRegularFileKey]
+        guard let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys)) else { return 0 }
+        var total: Int64 = 0
+        for case let file as URL in e {
+            guard let v = try? file.resourceValues(forKeys: keys), v.isRegularFile == true else { continue }
+            total += Int64(v.totalFileAllocatedSize ?? 0)
+        }
+        return total
+    }
+
+    /// Reads architecture details from a model's `config.json`.
+    public static func readConfig(at directory: URL) -> (modelType: String?, bits: Int?, context: Int?) {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent("config.json")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return (nil, nil, nil) }
+        return parseConfig(json)
+    }
+
+    static func parseConfig(_ json: [String: Any]) -> (modelType: String?, bits: Int?, context: Int?) {
+        let text = json["text_config"] as? [String: Any]
+        let modelType = json["model_type"] as? String
+        let quant = (json["quantization"] as? [String: Any]) ?? (json["quantization_config"] as? [String: Any])
+        let bits = quant?["bits"] as? Int
+        let context = (json["max_position_embeddings"] as? Int) ?? (text?["max_position_embeddings"] as? Int)
+            ?? (json["max_sequence_length"] as? Int) ?? (json["seq_length"] as? Int)
+        return (modelType, bits, context)
+    }
+}

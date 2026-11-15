@@ -1,0 +1,111 @@
+import Foundation
+
+/// Minimal read-only client for the Hugging Face Hub metadata API. Only model metadata and files are
+/// fetched; nothing about the user (prompts, chats, files) is ever sent.
+public struct HubAPI: Sendable {
+    public var endpoint: URL
+    public var session: URLSession
+
+    public init(endpoint: URL = URL(string: "https://huggingface.co")!, session: URLSession = .shared) {
+        self.endpoint = endpoint
+        self.session = session
+    }
+
+    /// Searches MLX conversions. `author` defaults to `mlx-community`, the established source of MLX weights.
+    public func search(_ query: String, author: String? = "mlx-community", limit: Int = 40) async throws -> [HubModelSummary] {
+        var c = URLComponents(url: endpoint.appendingPathComponent("api/models"), resolvingAgainstBaseURL: false)!
+        var items = [
+            URLQueryItem(name: "filter", value: "mlx"),
+            URLQueryItem(name: "sort", value: "downloads"),
+            URLQueryItem(name: "direction", value: "-1"),
+            URLQueryItem(name: "limit", value: String(min(max(limit, 1), 100))),
+        ]
+        if let author { items.append(URLQueryItem(name: "author", value: author)) }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { items.append(URLQueryItem(name: "search", value: String(trimmed.prefix(100)))) }
+        for e in ["config", "downloads", "lastModified", "library_name", "pipeline_tag", "tags", "safetensors"] {
+            items.append(URLQueryItem(name: "expand[]", value: e))
+        }
+        c.queryItems = items
+        let data = try await get(c.url!)
+        return try Self.parseSearch(data)
+    }
+
+    /// Lists every file of `id` at `revision` (recursive).
+    public func files(of id: ModelRepoID, revision: String = "main") async throws -> [HubFile] {
+        let url = endpoint.appendingPathComponent("api/models/\(id.owner)/\(id.name)/tree/\(revision)")
+        var c = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        c.queryItems = [URLQueryItem(name: "recursive", value: "true")]
+        return try Self.parseTree(try await get(c.url!))
+    }
+
+    /// Downloads a small file (e.g. `config.json`) into memory.
+    public func smallFile(_ path: String, of id: ModelRepoID, revision: String = "main") async throws -> Data {
+        try await get(fileURL(path, of: id, revision: revision))
+    }
+
+    public func fileURL(_ path: String, of id: ModelRepoID, revision: String = "main") -> URL {
+        var url = endpoint.appendingPathComponent(id.owner).appendingPathComponent(id.name)
+            .appendingPathComponent("resolve").appendingPathComponent(revision)
+        for component in path.split(separator: "/") { url.appendPathComponent(String(component)) }
+        return url
+    }
+
+    private func get(_ url: URL) async throws -> Data {
+        var request = URLRequest(url: url, timeoutInterval: 30)
+        request.setValue("LayX", forHTTPHeaderField: "User-Agent")
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw ModelStoreError.network(error.localizedDescription)
+        }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else { throw ModelStoreError.http(status: status) }
+        return data
+    }
+
+    // MARK: Parsing (pure, unit-tested)
+
+    static func parseSearch(_ data: Data) throws -> [HubModelSummary] {
+        guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return array.compactMap { item in
+            guard let raw = item["id"] as? String, let id = ModelRepoID(raw) else { return nil }
+            let config = item["config"] as? [String: Any] ?? [:]
+            let parsed = ModelStore.parseConfig(config)
+            let safetensors = item["safetensors"] as? [String: Any]
+            return HubModelSummary(
+                id: id, modelType: parsed.modelType, quantizationBits: parsed.bits,
+                parameterCount: (safetensors?["total"] as? NSNumber)?.int64Value,
+                downloads: item["downloads"] as? Int ?? 0,
+                lastModified: (item["lastModified"] as? String).flatMap { iso.date(from: $0) },
+                tags: item["tags"] as? [String] ?? [],
+                libraryName: item["library_name"] as? String,
+                pipelineTag: item["pipeline_tag"] as? String)
+        }
+    }
+
+    static func parseTree(_ data: Data) throws -> [HubFile] {
+        guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return array.compactMap { item in
+            guard item["type"] as? String == "file", let path = item["path"] as? String else { return nil }
+            let lfs = item["lfs"] as? [String: Any]
+            let size = (lfs?["size"] as? NSNumber)?.int64Value ?? (item["size"] as? NSNumber)?.int64Value ?? 0
+            return HubFile(path: path, size: size, sha256: lfs?["oid"] as? String)
+        }
+    }
+
+    /// The files an MLX LLM needs: weights, configs, tokenizer and chat template. Skips docs, images, other
+    /// weight formats, and anything in subdirectories.
+    public static func requiredFiles(_ all: [HubFile]) -> [HubFile] {
+        let names: Set<String> = ["tokenizer.model", "merges.txt", "vocab.txt", "chat_template.jinja"]
+        return all.filter { f in
+            guard !f.path.contains("/") else { return false }
+            let lower = f.path.lowercased()
+            return lower.hasSuffix(".safetensors") || lower.hasSuffix(".json") || lower.hasSuffix(".tiktoken")
+                || names.contains(lower)
+        }
+    }
+}

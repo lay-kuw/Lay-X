@@ -57,7 +57,6 @@ struct Sidebar: View {
                 .padding(.top, 10)
 
             LXField(placeholder: "Search or command", text: $search, symbol: "magnifyingglass")
-                .overlay(alignment: .trailing) { Keycap(text: "⌘K").padding(.trailing, 6) }
                 .padding(.top, 20).padding(.bottom, 8)
 
             VStack(spacing: 1) {
@@ -84,25 +83,27 @@ struct Sidebar: View {
         case .chat:
             sectionHeader("Session", note: "· not saved")
             if !state.pinned {
-                ListRow(symbol: "clock", title: state.chatTitle, meta: "now", selected: true)
+                ListRow(symbol: "clock", title: state.chatTitle, meta: "", selected: true)
             }
-            ForEach(Mock.sessionChats) { ListRow(symbol: "clock", title: $0.title, meta: $0.age) }
+            ForEach(Mock.sessionChats) { ListRow(symbol: "clock", title: $0.title, meta: "") }
             sectionHeader("Pinned")
             if state.pinned {
-                ListRow(symbol: "pin", title: state.chatTitle, meta: "now", selected: true)
+                ListRow(symbol: "star", title: state.chatTitle, meta: "", selected: true)
             }
-            ForEach(Mock.pinnedChats) { ListRow(symbol: "pin", title: $0.title, meta: $0.age) }
+            ForEach(Mock.pinnedChats) { ListRow(symbol: "star", title: $0.title, meta: "") }
         case .work:
             sectionHeader("Projects")
             ListRow(symbol: "folder", title: "lay-x-app", meta: "3", selected: true)
             ListRow(symbol: "folder", title: "mlx-bench", meta: "")
             ListRow(symbol: "folder", title: "docs-site", meta: "")
-            ListRow(symbol: "plus", title: "Open folder…", meta: "⌘O")
+            ListRow(symbol: "plus", title: "Open folder…", meta: "")
         case .models:
             sectionHeader("Library")
-            ListRow(symbol: "shippingbox", title: "Installed", meta: "6", selected: true)
-            ListRow(symbol: "magnifyingglass", title: "Discover", meta: "")
-            ListRow(symbol: "arrow.down.to.line", title: "Downloads", meta: "1")
+            let library = AppServices.shared.models
+            libraryRow("shippingbox", "Installed", library.installed.isEmpty ? "" : "\(library.installed.count)", .installed)
+            libraryRow("magnifyingglass", "Discover", "", .discover)
+            let pending = Set(library.activeDownloads.map(\.id)).union(library.incomplete.map(\.id)).count
+            libraryRow("arrow.down.to.line", "Downloads", pending == 0 ? "" : "\(pending)", .downloads)
         case .performance:
             sectionHeader("Runs")
             ListRow(symbol: nil, title: "Context sweep · 3 models", meta: "now", selected: true)
@@ -121,6 +122,12 @@ struct Sidebar: View {
                     .onTapGesture { state.settingsCategory = c }
             }
         }
+    }
+
+    private func libraryRow(_ symbol: String, _ title: String, _ meta: String, _ tab: ModelsScreen.Tab) -> some View {
+        ListRow(symbol: symbol, title: title, meta: meta, selected: state.modelsTab == tab)
+            .contentShape(Rectangle())
+            .onTapGesture { state.modelsTab = tab }
     }
 
     private static let endpoints: [(path: String, count: String)] = [
@@ -150,9 +157,6 @@ struct NavRow: View {
                 Spacer()
                 if screen == .api {
                     HStack(spacing: 6) { LiveDot(); Text(":1234").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan) }
-                } else {
-                    Text(screen == .settings ? "⌘," : "⌘\(String(screen.shortcut.character))")
-                        .font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
                 }
             }
             .foregroundStyle(selected ? Color.white : Color(hex: 0xC9CBD6))

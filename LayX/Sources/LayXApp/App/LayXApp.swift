@@ -9,10 +9,7 @@ import LayXMLX
 enum LayXMain {
     static func main() {
         #if canImport(LayXMLX)
-        if CommandLine.arguments.contains("--mlx-selftest") {
-            print("mlx-selftest: \(MLXSelfTest.run())")
-            exit(0)
-        }
+        if CommandLineTools.handle(CommandLine.arguments) { return }
         #endif
         LayXApplication.main()
     }
@@ -50,7 +47,7 @@ struct LayXApplication: App {
             CommandMenu("Chat") {
                 Button(state.pinned ? "Unpin Chat" : "Pin Chat") { state.togglePin() }.keyboardShortcut("p")
                 Button("Toggle Inspector") { withAnimation(LX.M.panel) { state.inspector.toggle() } }.keyboardShortcut("i")
-                Button("Show Mini Chat  (⌥Space)") { MiniChatController.shared.toggle() }
+                Button("Show Mini Chat") { MiniChatController.shared.toggle() }
             }
         }
     }
@@ -130,6 +127,7 @@ final class AppState: ObservableObject {
     @Published var screen: Screen = .chat
     @Published var settingsCategory: SettingsScreen.Category = .appearance
     @Published var inspector = false
+    @Published var modelsTab: ModelsScreen.Tab = .installed
 
     // Chat
     @Published var phase: ChatPhase = .conversation

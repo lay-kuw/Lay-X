@@ -307,7 +307,8 @@ struct LXButtonStyle: ButtonStyle {
     }
 }
 
-/// Button with a label, optional SF Symbol and a visible keycap.
+/// Button with a label and optional SF Symbol. `shortcut` is accepted for call-site documentation only:
+/// shortcut hints are not shown in the UI (user decision 2026-11-16); bind keys with `.keyboardShortcut`.
 struct LXButton: View {
     let title: String
     var symbol: String? = nil
@@ -320,7 +321,6 @@ struct LXButton: View {
             HStack(spacing: 7) {
                 if let symbol { Image(systemName: symbol).font(.system(size: 11, weight: .semibold)) }
                 Text(title)
-                if let shortcut { Keycap(text: shortcut, onGlass: kind == .primary) }
             }
         }
         .buttonStyle(LXButtonStyle(kind: kind))

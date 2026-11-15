@@ -51,9 +51,8 @@ struct ChatScreen: View {
                 live: state.phase == .generating)
             Button { state.togglePin() } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: state.pinned ? "pin.fill" : "pin").font(.system(size: 11))
+                    Image(systemName: state.pinned ? "star.fill" : "star").font(.system(size: 11))
                     Text(state.pinned ? "Pinned" : "Pin")
-                    Keycap(text: "⌘P", onGlass: state.pinned)
                 }
             }
             .buttonStyle(LXButtonStyle(kind: state.pinned ? .primary : .secondary, height: 30))
@@ -129,7 +128,6 @@ struct EmptyChat: View {
                         HStack {
                             Text(s).font(LX.F.body).foregroundStyle(hovered == i ? Color.white : Color(hex: 0xC9CBD6))
                             Spacer()
-                            Keycap(text: "⌥\(i + 1)")
                         }
                         .padding(.horizontal, 10).frame(height: 34)
                         .background(RoundedRectangle(cornerRadius: LX.R.md).fill(LX.C.accent.opacity(hovered == i ? 0.12 : 0)))
@@ -150,16 +148,22 @@ struct EmptyChat: View {
 struct Composer: View {
     @EnvironmentObject var state: AppState
     @FocusState private var focused: Bool
+    @State private var selection: TextSelection?
 
     var body: some View {
         VStack(spacing: 0) {
             if state.phase == .generating { GeneratingRibbon() }
             TextField(state.phase == .empty ? "Ask Qwen3 14B anything   ·   / for commands" : "Message Qwen3 14B   ·   / for commands",
-                      text: $state.draft, axis: .vertical)
+                      text: $state.draft, selection: $selection, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(LX.F.bodyLarge)
                 .lineLimit(1...6)
                 .focused($focused)
+                .onKeyPress(.return, phases: .down) { press in
+                    guard press.modifiers.contains(.shift) else { return .ignored }  // plain Return → onSubmit
+                    insertNewline()
+                    return .handled
+                }
                 .onSubmit { submit() }
                 .padding(.horizontal, 14).padding(.top, 13).padding(.bottom, 9)
             HStack(spacing: 6) {
@@ -203,6 +207,21 @@ struct Composer: View {
         state.draft = ""
         state.send()
     }
+
+    /// Shift+Return: insert a line break at the caret (replacing any selected text).
+    private func insertNewline() {
+        let text = state.draft
+        if case .selection(let range)? = selection?.indices,
+           range.lowerBound >= text.startIndex, range.upperBound <= text.endIndex {
+            var updated = text
+            updated.replaceSubrange(range, with: "\n")
+            let caret = updated.index(updated.startIndex, offsetBy: text.distance(from: text.startIndex, to: range.lowerBound) + 1)
+            state.draft = updated
+            selection = TextSelection(insertionPoint: caret)
+        } else {
+            state.draft += "\n"
+        }
+    }
 }
 
 // MARK: - Inspector (⌘I)
@@ -211,7 +230,7 @@ struct InspectorPanel: View {
     @EnvironmentObject var state: AppState
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack { Text("Inspector").font(LX.F.ui(12.5, .semibold)); Spacer(); Keycap(text: "⌘I") }
+            HStack { Text("Inspector").font(LX.F.ui(12.5, .semibold)); Spacer() }
                 .padding(.horizontal, 16).frame(height: LX.S.header)
             Rectangle().fill(LX.C.divider).frame(height: 1)
             VStack(alignment: .leading, spacing: 22) {
