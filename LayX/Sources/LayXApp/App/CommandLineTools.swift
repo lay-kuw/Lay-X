@@ -16,7 +16,7 @@ nonisolated enum CommandLineTools {
         case "--mlx-selftest":
             print("mlx-selftest: \(MLXSelfTest.run())")
             exit(0)
-        case "--download", "--generate", "--list-models", "--engine-check", "--search":
+        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check":
             Task.detached {
                 do {
                     try await run(args)
@@ -33,7 +33,7 @@ nonisolated enum CommandLineTools {
     }
 
     /// Commands handled headlessly; anything else starts the GUI.
-    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search"]
+    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check"]
 
     private static func run(_ args: [String]) async throws {
         let store = ModelStore(root: try ModelStore.defaultRoot())
@@ -78,6 +78,11 @@ nonisolated enum CommandLineTools {
                                  m.decodeTokensPerSecond ?? 0, m.totalDuration.seconds))
                 }
             }
+        case "--chat-check":
+            guard args.count >= 3, let id = ModelRepoID(args[2]), let model = store.installedModel(id) else {
+                throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "")
+            }
+            try await ChatCheck.run(model: model)
         case "--search":
             let support = MLXArchitectureSupport()
             for r in try await HubAPI().search(args.count >= 3 ? args[2] : "", limit: 12) {
@@ -143,3 +148,76 @@ nonisolated enum CommandLineTools {
 }
 #endif
 
+
+@MainActor final class TokenLimit { var value = 40 }
+
+/// End-to-end check of the chat pipeline with real MLX and a real SQLite file (in a temp directory):
+/// unpinned content must never reach the database file; pinned content must; unpin must remove it.
+@MainActor
+enum ChatCheck {
+    static func run(model: InstalledModel) async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("layx-chatcheck-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let dbURL = dir.appendingPathComponent("check.sqlite")
+        let db = try SQLiteDatabase(location: .file(dbURL), migrations: LayXSchema.migrations)
+        let repo = PinnedChatRepository(database: db)
+        let coordinator = InferenceCoordinator(engine: MLXEngine())
+        try await coordinator.load(model.reference)
+        let limit = TokenLimit()
+        let store = ChatSessionStore(
+            coordinator: coordinator, repository: repo,
+            settings: { ChatGenerationSettings(parameters: GenerationParameters(temperature: 0, maxTokens: limit.value, seed: 0)) },
+            prepareModel: { throw InferenceError.noModelLoaded })
+
+        func waitIdle() async throws {
+            while !store.generating.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+            await store.flushWrites()
+        }
+        func dbBytesContain(_ marker: String) -> Bool {
+            let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+            return files.contains { (try? Data(contentsOf: $0))?.range(of: Data(marker.utf8)) != nil }
+        }
+
+        let secret = "TEMPMARKER-\(UUID().uuidString.prefix(8))"
+        let a = store.newSession()
+        store.send("Repeat this code exactly: \(secret) /no_think", in: a)
+        try await waitIdle()
+        let reply = store.session(a)?.messages.last?.content ?? ""
+        print("1 unpinned chat: reply \(reply.count) chars, metrics \(store.session(a)?.messages.last?.metrics != nil)")
+        print("  marker in DB files: \(dbBytesContain(secret)) (expected false)")
+
+        let pinMarker = "PINMARKER-\(UUID().uuidString.prefix(8))"
+        let b = store.newSession()
+        store.send("Say hello. \(pinMarker) /no_think", in: b)
+        try await waitIdle()
+        store.setPinned(b, true)
+        await store.flushWrites()
+        let stored = try await repo.loadAll()
+        print("2 pinned: stored sessions \(stored.count), messages \(stored.first?.messages.count ?? 0), marker in DB: \(dbBytesContain(pinMarker)) (expected true)")
+
+        store.send("And goodbye. /no_think", in: b)
+        try await waitIdle()
+        print("3 follow-up persisted: \(try await repo.loadAll().first?.messages.count ?? 0) messages (expected 4)")
+
+        store.setPinned(b, false)
+        await store.flushWrites()
+        await db.close()
+        let reopened = try SQLiteDatabase(location: .file(dbURL), migrations: LayXSchema.migrations)
+        let after = try await PinnedChatRepository(database: reopened).loadAll()
+        try await reopened.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        await reopened.close()
+        print("4 unpinned again: stored \(after.count) (expected 0), in memory \(store.session(b)?.messages.count ?? 0) messages, marker in DB: \(dbBytesContain(pinMarker)) (expected false)")
+        print("  temp marker ever in DB: \(dbBytesContain(secret)) (expected false)")
+
+        limit.value = 800
+        store.send("Write a long story about the sea. /no_think", in: a)
+        try await Task.sleep(for: .milliseconds(300))
+        store.stop(a)
+        try await waitIdle()
+        let last = store.session(a)?.messages.last
+        print("5 stop: interrupted=\(last?.interrupted ?? false), partial \(last?.content.count ?? 0) chars")
+        store.regenerate(a)
+        try await waitIdle()
+        print("6 regenerate: \(store.session(a)?.messages.count ?? 0) messages, last interrupted=\(store.session(a)?.messages.last?.interrupted ?? true)")
+    }
+}

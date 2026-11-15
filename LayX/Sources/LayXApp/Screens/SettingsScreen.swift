@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import LayXCore
 
 struct SettingsScreen: View {
     enum Category: String, CaseIterable, Identifiable {
@@ -21,15 +22,16 @@ struct SettingsScreen: View {
     @AppStorage(LX.Glow.storageKey) private var glowRaw = LX.Glow.violet.rawValue
     @State private var followSystem = true
     @State private var search = ""
-    @State private var defaultChat = "Qwen3 14B · 4-bit"
     @State private var defaultWork = "Qwen3 30B-A3B · 4-bit"
     @State private var keepLoaded = "15 minutes"
     @State private var memoryLimit = 40.0
     @State private var kv: KVQuant = .eight
     @State private var promptCache = true
-    @State private var temperature = 0.7
-    @State private var topP = 0.95
-    @State private var maxTokens = "4,096"
+    @AppStorage(ChatPreferences.temperatureKey) private var temperature = ChatPreferences.defaultTemperature
+    @AppStorage(ChatPreferences.topPKey) private var topP = ChatPreferences.defaultTopP
+    @AppStorage(ChatPreferences.maxTokensKey) private var maxTokensValue = ChatPreferences.defaultMaxTokens
+    @AppStorage(ChatPreferences.defaultChatModelKey) private var defaultChatID = ""
+    @State private var maxTokens = ""
 
     private let modelOptions = ["Qwen3 14B · 4-bit", "Qwen3 30B-A3B · 4-bit", "Gemma 3 27B · 4-bit", "Phi-4 mini · 8-bit"]
 
@@ -45,6 +47,7 @@ struct SettingsScreen: View {
                     switch state.settingsCategory {
                     case .appearance: appearancePage
                     case .inference: inferencePage
+                    case .mini: miniChatPage
                     default:
                         Text("This section is not part of the design preview yet.")
                             .font(LX.F.body).foregroundStyle(LX.C.tertiary)
@@ -123,7 +126,7 @@ struct SettingsScreen: View {
     private var inferencePage: some View {
                 VStack(alignment: .leading, spacing: 22) {
                     group("Default model") {
-                        row("Chat & Mini Chat", "Used for new chats and Mini Chat") { menu($defaultChat, modelOptions) }
+                        row("Chat & Mini Chat", "Used for new chats and Mini Chat") { defaultChatMenu }
                         row("Work", "Larger context for multi-file edits") { menu($defaultWork, modelOptions) }
                         row("Keep model loaded", "Unload after a period of inactivity to free memory") {
                             menu($keepLoaded, ["5 minutes", "15 minutes", "1 hour", "Always"], width: 140)
@@ -165,7 +168,12 @@ struct SettingsScreen: View {
                             GradientSlider(value: $topP, range: 0...1) { String(format: "%.2f", $0) }
                         }
                         row("Max output tokens", nil) {
-                            LXField(placeholder: "4,096", text: $maxTokens, mono: true).frame(width: 100)
+                            LXField(placeholder: maxTokensValue.formatted(), text: $maxTokens, mono: true).frame(width: 100)
+                                .onAppear { maxTokens = maxTokensValue.formatted() }
+                                .onChange(of: maxTokens) { _, new in
+                                    let digits = new.filter(\.isNumber)
+                                    if let v = Int(digits), v > 0 { maxTokensValue = min(v, 131_072) }
+                                }
                         }
                     }
                     HStack(spacing: 10) {
@@ -181,6 +189,65 @@ struct SettingsScreen: View {
     }
 
     @State private var storageError: String?
+
+    // MARK: Mini Chat
+    private var miniChatPage: some View {
+        let hotKey = GlobalHotKey.shared
+        return VStack(alignment: .leading, spacing: 22) {
+            group("Shortcut") {
+                row("Open Mini Chat", "Works from any app. No Accessibility permission is needed.") {
+                    Menu {
+                        ForEach(HotKeySpec.choices) { spec in
+                            Button { hotKey.set(spec) } label: {
+                                if hotKey.current == spec { Label(spec.displayString, systemImage: "checkmark") } else { Text(spec.displayString) }
+                            }
+                        }
+                        Divider()
+                        Button("Off") { hotKey.set(nil) }
+                    } label: { menuLabel(hotKey.current?.displayString ?? "Off", width: 160) }
+                    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                }
+                row("Status", nil) {
+                    Text(hotKey.status.message)
+                        .font(LX.F.ui(12))
+                        .foregroundStyle({ if case .registered = hotKey.status { LX.C.secondary } else if case .disabled = hotKey.status { LX.C.tertiary } else { LX.C.warn } }())
+                        .multilineTextAlignment(.trailing)
+                        .frame(maxWidth: 360, alignment: .trailing)
+                }
+            }
+            group("Conversation") {
+                row("Keeps its conversation", "Hiding Mini Chat doesn’t clear it. Temporary chats disappear when Lay X quits; pin to keep one.") {
+                    Text("Shared with Chat").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary)
+                }
+            }
+        }
+    }
+
+    private var defaultChatMenu: some View {
+        let library = AppServices.shared.models
+        let current = library.model(defaultChatID).map { ModelDisplay.name($0.id) }
+            ?? AppServices.defaultChatModel(in: library).map { "\(ModelDisplay.name($0.id)) (last used)" } ?? "No models installed"
+        return Menu {
+            ForEach(library.installed) { m in
+                Button(ModelDisplay.name(m.id)) { defaultChatID = m.id.description }
+            }
+            if !defaultChatID.isEmpty {
+                Divider()
+                Button("Most recently used") { defaultChatID = "" }
+            }
+        } label: { menuLabel(current, width: 200) }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+    }
+
+    private func menuLabel(_ text: String, width: CGFloat) -> some View {
+        HStack {
+            Text(text).font(LX.F.ui(12.5)).foregroundStyle(LX.C.primary).lineLimit(1)
+            Spacer()
+            Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+        }
+        .padding(.horizontal, 10).frame(width: width, height: LX.S.control)
+        .well(radius: LX.R.md, fill: Color.black.opacity(0.28))
+    }
 
     private var storageHelp: String {
         "Where downloaded models are kept. Existing models stay in the old folder."

@@ -37,78 +37,9 @@ enum Screen: String, CaseIterable, Identifiable {
     }
 }
 
-struct ChatSummary: Identifiable, Hashable {
-    let id = UUID()
-    var title: String
-    var age: String
-    var pinned: Bool
-}
-
-enum Block: Hashable {
-    case text(String)
-    case code(language: String, filename: String, code: String)
-}
-
-struct Message: Identifiable, Hashable {
-    let id = UUID()
-    var isUser: Bool
-    var author: String
-    var meta: String
-    var blocks: [Block]
-}
-
-enum Mock {
-    static let question = "MLX Swiftでトークンをストリーミングしながら、SwiftUIのテキストを滑らかに更新したい。再描画が多すぎて重くなるのを避けるには？"
-
-    static let answerIntro = "ポイントはトークンごとにViewを更新しないことです。生成ループ側でバッファし、約30msごとにまとめてMainActorへ流すと、体感の滑らかさを保ったまま再描画を大幅に減らせます。"
-
-    static let answerCode = """
-    @MainActor final class StreamBuffer: ObservableObject {
-        @Published private(set) var text = ""
-        private var pending = ""
-        private var flushTask: Task<Void, Never>?
-
-        func append(_ token: String) {
-            pending += token
-            guard flushTask == nil else { return }
-            flushTask = Task {
-                try? await Task.sleep(for: .milliseconds(30))
-                text += pending; pending = ""; flushTask = nil
-            }
-        }
-    }
-    """
-
-    static let answerOutro = "長文は段落単位で LazyVStack に並べ、スクロール追従は末尾アンカーのみ更新します。"
-
-    static let conversation: [Message] = [
-        Message(isUser: true, author: "You", meta: "14:02:11", blocks: [.text(question)]),
-        Message(isUser: false, author: "Qwen3 14B", meta: "412 tok · 8.5 s", blocks: [
-            .text(answerIntro),
-            .code(language: "swift", filename: "StreamBuffer.swift", code: answerCode),
-            .text(answerOutro),
-        ]),
-    ]
-
-    static let sessionChats: [ChatSummary] = [
-        ChatSummary(title: "Regex for log lines", age: "12m", pinned: false),
-    ]
-    static let pinnedChats: [ChatSummary] = [
-        ChatSummary(title: "Q1 roadmap — local-first", age: "2d", pinned: true),
-        ChatSummary(title: "Prompt library · Review", age: "5d", pinned: true),
-        ChatSummary(title: "日本語の要約テンプレート", age: "1w", pinned: true),
-    ]
-
-    static let suggestions = ["Explain a Swift concurrency bug", "議事録を3行で要約", "Draft a release note"]
-
-    // Mini Chat
-    static let miniAnswer = "onReceive で毎トークン text を更新しているのが原因です。バッファを挟んで30ms単位でflushします。"
-    static let miniDiff = """
-    - .onReceive(stream) { text += $0 }
-    + .onReceive(stream) { buffer.append($0) }
-    + .onReceive(buffer.$text) { text = $0 }
-    """
-}
+/// Prototype mock data for screens not yet wired to live services (Work, Performance, API Server).
+/// Each later stage deletes its section.
+enum Mock {}
 
 // MARK: - Work
 

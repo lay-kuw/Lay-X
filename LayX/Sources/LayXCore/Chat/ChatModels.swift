@@ -59,9 +59,12 @@ public struct ChatMessage: Sendable, Identifiable, Hashable, Codable {
     public var modelID: String?
     public var createdAt: Date
     public var metrics: GenerationMetrics?
+    /// The reply was stopped by the user or an error before it finished.
+    public var interrupted: Bool
 
     public init(id: UUID = UUID(), role: ChatRole, content: String, modelID: String? = nil,
-                createdAt: Date = Date(), metrics: GenerationMetrics? = nil) {
+                createdAt: Date = Date(), metrics: GenerationMetrics? = nil, interrupted: Bool = false) {
+        self.interrupted = interrupted
         self.id = id
         self.role = role
         self.content = content

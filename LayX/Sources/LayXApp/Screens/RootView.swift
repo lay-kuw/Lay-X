@@ -1,4 +1,5 @@
 import SwiftUI
+import LayXCore
 
 struct RootView: View {
     @EnvironmentObject var state: AppState
@@ -81,16 +82,11 @@ struct Sidebar: View {
     @ViewBuilder private var contextual: some View {
         switch state.screen {
         case .chat:
+            let chats = AppServices.shared.chats
             sectionHeader("Session", note: "· not saved")
-            if !state.pinned {
-                ListRow(symbol: "clock", title: state.chatTitle, meta: "", selected: true)
-            }
-            ForEach(Mock.sessionChats) { ListRow(symbol: "clock", title: $0.title, meta: "") }
+            ForEach(chats.temporarySessions.filter { !$0.messages.isEmpty || $0.id == state.currentChatID }) { chatRow($0, symbol: "clock") }
             sectionHeader("Pinned")
-            if state.pinned {
-                ListRow(symbol: "star", title: state.chatTitle, meta: "", selected: true)
-            }
-            ForEach(Mock.pinnedChats) { ListRow(symbol: "star", title: $0.title, meta: "") }
+            ForEach(chats.pinnedSessions) { chatRow($0, symbol: "star") }
         case .work:
             sectionHeader("Projects")
             ListRow(symbol: "folder", title: "lay-x-app", meta: "3", selected: true)
@@ -122,6 +118,20 @@ struct Sidebar: View {
                     .onTapGesture { state.settingsCategory = c }
             }
         }
+    }
+
+    private func chatRow(_ session: ChatSession, symbol: String) -> some View {
+        let chats = AppServices.shared.chats
+        return ListRow(symbol: chats.isGenerating(session.id) ? "ellipsis" : symbol, title: session.title, meta: "",
+                       selected: session.id == state.currentChatID)
+            .contentShape(Rectangle())
+            .onTapGesture { state.currentChatID = session.id }
+            .contextMenu {
+                Button(session.isPinned ? "Unpin" : "Pin") { chats.togglePin(session.id) }
+                    .disabled(session.messages.isEmpty)
+                Divider()
+                Button("Delete", role: .destructive) { state.deleteChat(session.id) }
+            }
     }
 
     private func libraryRow(_ symbol: String, _ title: String, _ meta: String, _ tab: ModelsScreen.Tab) -> some View {

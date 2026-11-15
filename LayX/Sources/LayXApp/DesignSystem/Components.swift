@@ -579,14 +579,17 @@ struct CodeBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text(language).foregroundStyle(LX.C.tertiary)
-                Text("·").foregroundStyle(Color(hex: 0x4A4D5C))
-                Text(filename).foregroundStyle(LX.C.secondary)
+                Text(language.isEmpty ? "code" : language).foregroundStyle(LX.C.tertiary)
+                if !filename.isEmpty {
+                    Text("·").foregroundStyle(Color(hex: 0x4A4D5C))
+                    Text(filename).foregroundStyle(LX.C.secondary)
+                }
                 Spacer()
                 IconButton(symbol: copied ? "checkmark" : "doc.on.doc", help: "Copy code") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(code, forType: .string)
                     copied = true
+                    Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
                 }
             }
             .font(LX.F.mono(11))

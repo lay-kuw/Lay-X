@@ -1,6 +1,7 @@
-import SwiftUI
 import AppKit
 import Carbon.HIToolbox
+import SwiftUI
+import LayXCore
 
 // MARK: - Panel
 
@@ -9,25 +10,32 @@ final class MiniPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+/// Owns the floating Mini Chat panel. The conversation itself lives in the shared `ChatSessionStore`;
+/// hiding the panel never discards it (it stays in the sidebar's Session list until quit, or forever if pinned).
 final class MiniChatController {
     static let shared = MiniChatController()
 
-    private let model = MiniChatModel()
+    let model = MiniChatModel()
     private lazy var panel: MiniPanel = makePanel()
     private let panelSize = NSSize(width: 820, height: 600) // includes room for the shadow
 
+    var isVisible: Bool { panel.isVisible }
+
     func toggle() {
-        if panel.isVisible { hide() } else { show() }
+        if panel.isVisible && panel.isKeyWindow { hide() } else { show() }
     }
 
     func show() {
-        if let screen = NSScreen.main {
+        // Appear on the display that has the mouse pointer (multi-display aware).
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
+        if let screen {
             let f = screen.visibleFrame
             let x = f.midX - panelSize.width / 2
             let topY = f.maxY - f.height * 0.22
             panel.setFrameTopLeftPoint(NSPoint(x: x, y: topY + 40))
         }
-        model.focusToken += 1
+        model.prepareForShow()
         panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
         NSAnimationContext.runAnimationGroup { ctx in
@@ -41,21 +49,20 @@ final class MiniChatController {
             ctx.duration = 0.12
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            MainActor.assumeIsolated {
-                self?.panel.orderOut(nil)
-                self?.model.discardIfTemporary()
-            }
+            MainActor.assumeIsolated { self?.panel.orderOut(nil) }
         })
     }
 
+    /// Shows the Mini Chat conversation in the main window.
     func openInMainWindow() {
         let state = AppState.shared
+        if let id = model.sessionID, AppServices.shared.chats.session(id) != nil {
+            state.currentChatID = id
+        }
         state.screen = .chat
-        state.pinned = model.pinned
-        state.phase = .conversation
         hide()
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.windows.first { !($0 is NSPanel) }?.makeKeyAndOrderFront(nil)
+        NSApp.windows.first { !($0 is NSPanel) && $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
     }
 
     private func makePanel() -> MiniPanel {
@@ -70,9 +77,12 @@ final class MiniChatController {
         p.hasShadow = false
         p.hidesOnDeactivate = false
         p.isMovableByWindowBackground = true
-        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        p.isRestorable = false  // never restore (or snapshot) chat content across launches
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         p.appearance = NSAppearance(named: .darkAqua)
-        let host = NSHostingView(rootView: MiniChatView(model: model).frame(width: panelSize.width, height: panelSize.height, alignment: .top))
+        let host = NSHostingView(rootView: MiniChatView(model: model)
+            .environment(AppServices.shared.inferenceStatus)
+            .frame(width: panelSize.width, height: panelSize.height, alignment: .top))
         host.frame = NSRect(origin: .zero, size: panelSize)
         p.contentView = host
         return p
@@ -81,93 +91,117 @@ final class MiniChatController {
 
 // MARK: - Model
 
-final class MiniChatModel: ObservableObject {
-    enum Phase { case idle, generating, answered }
-    @Published var input = ""
-    @Published var phase: Phase = .idle
-    @Published var streamed = ""
-    @Published var pinned = false
-    @Published var focusToken = 0
-    private var timer: Timer?
-    private var index = Mock.miniAnswer.startIndex
+/// Mini Chat's pointer into the shared session store, plus its input draft.
+@Observable
+final class MiniChatModel {
+    var input = ""
+    var focusToken = 0
+    /// The conversation shown in Mini Chat. Kept across show/hide.
+    private(set) var sessionID: UUID?
+
+    var chats: ChatSessionStore { AppServices.shared.chats }
+    var session: ChatSession? { chats.session(sessionID) }
+    var isGenerating: Bool { chats.isGenerating(sessionID) }
+
+    func prepareForShow() {
+        if session == nil { sessionID = nil }  // deleted from the main window meanwhile
+        focusToken += 1
+    }
 
     func submit() {
-        guard !input.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        timer?.invalidate()
-        streamed = ""
-        index = Mock.miniAnswer.startIndex
-        withAnimation(LX.M.mini) { phase = .generating }
-        timer = Timer.scheduledTimer(withTimeInterval: LX.M.streamFlush, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tick() }
-        }
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isGenerating else { return }
+        let id = sessionID.flatMap { chats.session($0) != nil ? $0 : nil } ?? chats.newSession()
+        sessionID = id
+        input = ""
+        chats.send(text, in: id)
     }
 
-    private func tick() {
-        let src = Mock.miniAnswer
-        guard index < src.endIndex else {
-            timer?.invalidate(); timer = nil
-            withAnimation(LX.M.mini) { phase = .answered }
-            return
-        }
-        let end = src.index(index, offsetBy: 2, limitedBy: src.endIndex) ?? src.endIndex
-        streamed += src[index..<end]
-        index = end
+    func newConversation() {
+        guard !isGenerating else { return }
+        sessionID = nil
+        input = ""
+        focusToken += 1
     }
 
-    func discardIfTemporary() {
-        guard !pinned else { return }
-        timer?.invalidate(); timer = nil
-        input = ""; streamed = ""; phase = .idle
+    func togglePin() {
+        guard let id = sessionID, session?.messages.isEmpty == false else { return }
+        chats.togglePin(id)
+    }
+
+    func stop() {
+        if let id = sessionID { chats.stop(id) }
     }
 }
 
 // MARK: - View
 
 struct MiniChatView: View {
-    @ObservedObject var model: MiniChatModel
+    @Bindable var model: MiniChatModel
+    @Environment(InferenceStatusModel.self) private var inference
     @AppStorage(LX.Glass.storageKey) private var transparency = LX.Glass.defaultValue
     @FocusState private var focused: Bool
+    @State private var selection: TextSelection?
+
+    private var lastReply: ChatMessage? {
+        guard let s = model.session, let last = s.messages.last else { return nil }
+        return last.role == .assistant ? last : nil
+    }
+    private var hasContent: Bool { model.session?.messages.isEmpty == false }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                TextField("Ask Qwen3 14B — on this Mac", text: $model.input)
+                TextField("Ask \(modelName) — on this Mac", text: $model.input, selection: $selection, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(LX.F.ui(16))
                     .foregroundStyle(Color.white)
+                    .lineLimit(1...5)
                     .focused($focused)
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard press.modifiers.contains(.shift) else { return .ignored }
+                        insertNewline()
+                        return .handled
+                    }
                     .onSubmit { model.submit() }
-                if model.phase == .generating {
-                    Text("47.9 tok/s").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan)
-                } else if model.phase != .idle {
-                    contextChip
+                if model.isGenerating {
+                    Text("generating…").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan)
                 }
             }
             .padding(.horizontal, 16)
-            .frame(height: 54)
+            .padding(.vertical, 16)
+            .frame(minHeight: 54)
 
-            if model.phase == .generating {
+            if model.isGenerating {
                 GeneratingRibbon()
-            } else if model.phase == .answered {
+            } else if hasContent {
                 Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
             }
 
-            if model.phase != .idle {
-                VStack(alignment: .leading, spacing: 11) {
-                    HStack(alignment: .lastTextBaseline, spacing: 3) {
-                        Text(model.streamed).font(LX.F.ui(13.5)).foregroundStyle(LX.C.body).lineSpacing(5)
-                        if model.phase == .generating { BlinkingCaret() }
+            if hasContent {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 11) {
+                        if let reply = lastReply {
+                            let parts = ThinkingParser.split(reply.content)
+                            if parts.isThinking && parts.answer.isEmpty {
+                                Text("Thinking…").font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
+                            }
+                            MarkdownView(text: parts.answer, compact: true)
+                            if model.isGenerating { BlinkingCaret() }
+                        } else if model.isGenerating {
+                            BlinkingCaret()
+                        }
+                        if let id = model.sessionID, let error = model.chats.errors[id] {
+                            Text(error).font(LX.F.ui(12.5)).foregroundStyle(LX.C.error)
+                        }
                     }
-                    if model.phase == .answered {
-                        Text(Syntax.highlight(Mock.miniDiff).diffColored())
-                            .font(LX.F.mono(12)).lineSpacing(4)
-                            .padding(.horizontal, 12).padding(.vertical, 10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .well(radius: 8, fill: LX.C.code)
-                    }
+                    .padding(.leading, 16).padding(.trailing, 18).padding(.vertical, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.leading, 16).padding(.trailing, 18).padding(.vertical, 14)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .scrollIndicators(.hidden)
+                .defaultScrollAnchor(.bottom)
+                .frame(maxHeight: 400)
+                .fixedSize(horizontal: false, vertical: true)
                 .transition(.opacity.combined(with: .move(edge: .top)))
 
                 footer
@@ -186,46 +220,49 @@ struct MiniChatView: View {
             .strokeBorder(LinearGradient(colors: [Color.white.opacity(0.12), .clear], startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.1)), lineWidth: 1))
         .shadow(color: .black.opacity(0.55), radius: 40, y: 30)
         .padding(.top, 40)
-        .animation(LX.M.mini, value: model.phase)
+        .animation(LX.M.mini, value: hasContent)
+        .animation(LX.M.mini, value: model.isGenerating)
         .onChange(of: model.focusToken) { focused = true }
         .onAppear { focused = true }
-        .onKeyPress(.escape) { MiniChatController.shared.hide(); return .handled }
+        .onKeyPress(.escape) {
+            if model.isGenerating { model.stop() } else { MiniChatController.shared.hide() }
+            return .handled
+        }
         .background {
             // Invisible buttons provide the panel's keyboard shortcuts.
             Group {
                 Button("") { MiniChatController.shared.openInMainWindow() }.keyboardShortcut(.return, modifiers: .command)
-                Button("") { model.pinned.toggle() }.keyboardShortcut("p", modifiers: .command)
+                Button("") { model.togglePin() }.keyboardShortcut("p", modifiers: .command)
+                Button("") { model.newConversation() }.keyboardShortcut("n", modifiers: .command)
             }
             .opacity(0)
         }
     }
 
-    private var contextChip: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "chevron.left.forwardslash.chevron.right").font(.system(size: 9, weight: .semibold))
-            Text("Xcode · 24 lines")
-        }
-        .font(LX.F.mono(10.5))
-        .foregroundStyle(LX.C.accentText)
-        .padding(.horizontal, 8).frame(height: 22)
-        .background(RoundedRectangle(cornerRadius: 5).fill(LX.C.accent.opacity(0.08)))
-        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(LX.C.accent.opacity(0.3), lineWidth: 1))
+    private var modelName: String {
+        if let id = inference.loadedModel?.id, let r = ModelRepoID(id) { return ModelDisplay.name(r) }
+        return AppServices.defaultChatModel(in: AppServices.shared.models).map { ModelDisplay.name($0.id) } ?? "Lay X"
     }
 
     private var footer: some View {
-        HStack(spacing: 4) {
+        let metrics = lastReply?.metrics
+        return HStack(spacing: 4) {
             HStack(spacing: 10) {
-                HStack(spacing: 6) { LiveDot(); Text("Qwen3 14B").foregroundStyle(LX.C.secondary) }
-                Text("182ms")
-                Text("51.2 tok/s")
-                Tag(text: model.pinned ? "PINNED" : "TEMP", color: LX.C.accentText)
+                HStack(spacing: 6) {
+                    if inference.loadedModel != nil { LiveDot() }
+                    Text(modelName).foregroundStyle(LX.C.secondary)
+                }
+                if let metrics {
+                    Text(String(format: "%.0fms", metrics.timeToFirstToken.milliseconds))
+                    if let tps = metrics.decodeTokensPerSecond { Text(String(format: "%.1f tok/s", tps)) }
+                }
+                Tag(text: model.session?.isPinned == true ? "PINNED" : "TEMP", color: LX.C.accentText)
             }
             .font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
             Spacer()
-            footerAction("Insert", "⌘I") {}
-            footerAction(model.pinned ? "Unpin" : "Pin", "⌘P") { model.pinned.toggle() }
-            footerAction("Open in Chat", "⌘↩") { MiniChatController.shared.openInMainWindow() }
-            footerAction("Actions", "⌘K", emphasized: true) {}
+            footerAction("New") { model.newConversation() }
+            footerAction(model.session?.isPinned == true ? "Unpin" : "Pin") { model.togglePin() }
+            footerAction("Open in Chat", emphasized: true) { MiniChatController.shared.openInMainWindow() }
         }
         .padding(.leading, 14).padding(.trailing, 8)
         .frame(height: 40)
@@ -233,7 +270,7 @@ struct MiniChatView: View {
         .overlay(alignment: .top) { Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1) }
     }
 
-    private func footerAction(_ title: String, _ key: String, emphasized: Bool = false, action: @escaping () -> Void) -> some View {
+    private func footerAction(_ title: String, emphasized: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(LX.F.ui(12)).foregroundStyle(LX.C.body)
@@ -242,41 +279,69 @@ struct MiniChatView: View {
         }
         .buttonStyle(.plain)
     }
-}
 
-private extension AttributedString {
-    /// Colors whole diff lines: "+" green, "-" muted.
-    func diffColored() -> AttributedString {
-        var out = AttributedString()
-        for line in String(characters).split(separator: "\n", omittingEmptySubsequences: false) {
-            var a = AttributedString(String(line) + "\n")
-            a.foregroundColor = line.hasPrefix("+") ? LX.C.ok : (line.hasPrefix("-") ? LX.C.tertiary : LX.C.body)
-            out += a
+    private func insertNewline() {
+        let text = model.input
+        if case .selection(let range)? = selection?.indices,
+           range.lowerBound >= text.startIndex, range.upperBound <= text.endIndex {
+            var updated = text
+            updated.replaceSubrange(range, with: "\n")
+            let caret = updated.index(updated.startIndex, offsetBy: text.distance(from: text.startIndex, to: range.lowerBound) + 1)
+            model.input = updated
+            selection = TextSelection(insertionPoint: caret)
+        } else {
+            model.input += "\n"
         }
-        return out
     }
 }
 
-// MARK: - Global hot key (⌥Space)
+// MARK: - Global hot key
 
+/// Registers the Mini Chat shortcut with Carbon's `RegisterEventHotKey` (no Accessibility permission needed).
+/// Registration failures (e.g. the shortcut is owned by another app) are reported, not ignored.
+@Observable
 final class GlobalHotKey {
-    private var hotKeyRef: EventHotKeyRef?
-    private var handlerRef: EventHandlerRef?
-    fileprivate static var action: (() -> Void)?
+    static let shared = GlobalHotKey()
+    static let storageKey = "lx.miniHotKey"
 
-    init(keyCode: UInt32 = UInt32(kVK_Space), modifiers: UInt32 = UInt32(optionKey), action: @escaping () -> Void) {
-        GlobalHotKey.action = action
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
-            DispatchQueue.main.async { GlobalHotKey.action?() }
-            return noErr
-        }, 1, &spec, nil, &handlerRef)
-        let id = EventHotKeyID(signature: OSType(0x4C_41_59_58), id: 1) // 'LAYX'
-        RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(), 0, &hotKeyRef)
+    private(set) var status: HotKeyStatus = .disabled
+    @ObservationIgnored private var hotKeyRef: EventHotKeyRef?
+    @ObservationIgnored private var handlerRef: EventHandlerRef?
+    @ObservationIgnored fileprivate static var action: (() -> Void)?
+
+    var current: HotKeySpec? {
+        HotKeySpec.decode(UserDefaults.standard.string(forKey: Self.storageKey)) ?? .default
     }
 
-    isolated deinit {
+    /// Installs the event handler once and registers the saved shortcut.
+    func start(action: @escaping () -> Void) {
+        Self.action = action
+        if handlerRef == nil {
+            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
+                DispatchQueue.main.async { GlobalHotKey.action?() }
+                return noErr
+            }, 1, &spec, nil, &handlerRef)
+        }
+        apply(current)
+    }
+
+    /// Changes the shortcut (nil = off). The previous one is released first.
+    func set(_ spec: HotKeySpec?) {
+        UserDefaults.standard.set(HotKeySpec.encode(spec), forKey: Self.storageKey)
+        apply(spec)
+    }
+
+    private func apply(_ spec: HotKeySpec?) {
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
-        if let handlerRef { RemoveEventHandler(handlerRef) }
+        hotKeyRef = nil
+        guard let spec else { status = .disabled; return }
+        let id = EventHotKeyID(signature: OSType(0x4C_41_59_58), id: 1) // 'LAYX'
+        let result = RegisterEventHotKey(spec.keyCode, spec.modifiers, id, GetApplicationEventTarget(), 0, &hotKeyRef)
+        status = HotKeyStatus.from(osStatus: result, spec: spec)
+        if result != noErr {
+            hotKeyRef = nil
+            Log.app.notice("Mini Chat shortcut registration failed: \(result)")
+        }
     }
 }

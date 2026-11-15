@@ -17,6 +17,7 @@ final class AppServices {
     let databaseError: String?
     let pinnedChats: (any PinnedChatStoring)?
     let models: ModelLibrary
+    let chats: ChatSessionStore
     private var memoryPressure: DispatchSourceMemoryPressure?
 
     static let modelStorePathKey = "lx.modelStorePath"
@@ -35,7 +36,8 @@ final class AppServices {
         let storeRoot = UserDefaults.standard.string(forKey: Self.modelStorePathKey).map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? (try? ModelStore.defaultRoot())
             ?? FileManager.default.temporaryDirectory.appendingPathComponent("LayXModels", isDirectory: true)
-        models = ModelLibrary(store: ModelStore(root: storeRoot), coordinator: coordinator, architectures: architectures)
+        let library = ModelLibrary(store: ModelStore(root: storeRoot), coordinator: coordinator, architectures: architectures)
+        models = library
 
         do {
             let db = try SQLiteDatabase(location: .file(try LayXSchema.defaultURL()), migrations: LayXSchema.migrations)
@@ -48,7 +50,27 @@ final class AppServices {
             databaseError = "Pinned chats can’t be saved: the local database couldn’t be opened."
             pinnedChats = nil
         }
+        let coordinator = self.coordinator
+        chats = ChatSessionStore(
+            coordinator: coordinator, repository: pinnedChats,
+            settings: { ChatPreferences.current },
+            prepareModel: {
+                guard let model = AppServices.defaultChatModel(in: library) else { throw ChatSetupError.noModelInstalled }
+                return try await coordinator.load(model.reference)
+            })
+        let chats = self.chats
+        Task { await chats.loadPinned() }
         startMemoryPressureMonitor()
+    }
+
+    /// The model used when a chat needs one and none is loaded: the configured default if installed, else the
+    /// most recently used, else the first installed model.
+    static func defaultChatModel(in library: ModelLibrary) -> InstalledModel? {
+        if let id = UserDefaults.standard.string(forKey: ChatPreferences.defaultChatModelKey), let m = library.model(id) { return m }
+        let byUse = library.installed.sorted {
+            (library.lastUsed($0.id) ?? .distantPast) > (library.lastUsed($1.id) ?? .distantPast)
+        }
+        return byUse.first
     }
 
     /// On critical memory pressure the model is unloaded if nothing is generating (it reloads on demand).

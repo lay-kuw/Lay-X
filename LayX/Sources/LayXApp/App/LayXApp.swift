@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import LayXCore
 #if canImport(LayXMLX)
 import LayXMLX
 #endif
@@ -45,7 +46,8 @@ struct LayXApplication: App {
                     .keyboardShortcut("t", modifiers: [.command, .option])
             }
             CommandMenu("Chat") {
-                Button(state.pinned ? "Unpin Chat" : "Pin Chat") { state.togglePin() }.keyboardShortcut("p")
+                Button(state.chats.session(state.currentChatID)?.isPinned == true ? "Unpin Chat" : "Pin Chat") { state.togglePin() }
+                    .keyboardShortcut("p")
                 Button("Toggle Inspector") { withAnimation(LX.M.panel) { state.inspector.toggle() } }.keyboardShortcut("i")
                 Button("Show Mini Chat") { MiniChatController.shared.toggle() }
             }
@@ -54,14 +56,27 @@ struct LayXApplication: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var hotKey: GlobalHotKey?
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Needed when launched with `swift run` (no app bundle).
         _ = AppServices.shared  // open the database and start the inference coordinator
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        hotKey = GlobalHotKey { MiniChatController.shared.toggle() }
+        GlobalHotKey.shared.start { MiniChatController.shared.toggle() }
+    }
+
+    /// Unpinned chats are memory-only: never let AppKit restore windows (and their content) on relaunch.
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
+    /// Stops generations and waits for queued pinned-chat writes before quitting.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let chats = AppServices.shared.chats
+        chats.cancelAll()
+        Task { @MainActor in
+            await chats.flushWrites()
+            await AppServices.shared.coordinator.unload()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }
 
@@ -81,6 +96,7 @@ struct WindowConfigurator: NSViewRepresentable {
             window.styleMask.insert(.fullSizeContentView)
             window.isMovableByWindowBackground = true
             window.appearance = NSAppearance(named: .darkAqua)
+            window.isRestorable = false
             context.coordinator.attach(to: window)
         }
         return view
@@ -117,69 +133,54 @@ final class WindowChrome {
     isolated deinit { for o in observers { NotificationCenter.default.removeObserver(o) } }
 }
 
-// MARK: - App state (mock)
+// MARK: - App state
 
+/// Window-level UI state (navigation, current chat, draft). Conversation content lives in `ChatSessionStore`.
 final class AppState: ObservableObject {
     static let shared = AppState()
-
-    enum ChatPhase { case empty, generating, conversation }
 
     @Published var screen: Screen = .chat
     @Published var settingsCategory: SettingsScreen.Category = .appearance
     @Published var inspector = false
     @Published var modelsTab: ModelsScreen.Tab = .installed
 
-    // Chat
-    @Published var phase: ChatPhase = .conversation
-    @Published var pinned = false
-    @Published var streamedText = ""
+    /// Session shown in the main window's Chat screen.
+    @Published var currentChatID: UUID?
     @Published var draft = ""
-    @Published var liveTPS: Double = 48.6
-    private var streamTimer: Timer?
 
-    var chatTitle: String { phase == .empty ? "Untitled" : "MLX streaming in SwiftUI" }
+    var chats: ChatSessionStore { AppServices.shared.chats }
+
+    /// Ensures there is a current session (an empty temporary one if needed) and returns its id.
+    @discardableResult
+    func ensureCurrentChat() -> UUID {
+        if let id = currentChatID, chats.session(id) != nil { return id }
+        let id = chats.newSession()
+        currentChatID = id
+        return id
+    }
 
     func newChat() {
-        stop()
-        pinned = false
-        phase = .empty
+        currentChatID = chats.newSession()
+        draft = ""
         screen = .chat
     }
 
-    func togglePin() { withAnimation(LX.M.hover) { pinned.toggle() } }
-
-    /// Simulates streaming: characters are buffered and flushed every 30 ms, as the design doc specifies.
-    private let streamSource = Mock.answerIntro
-    private var streamIndex = Mock.answerIntro.startIndex
-
-    func send() {
-        stop()
-        streamedText = ""
-        streamIndex = streamSource.startIndex
-        phase = .generating
-        streamTimer = Timer.scheduledTimer(withTimeInterval: LX.M.streamFlush, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tick() }
-        }
+    func togglePin() {
+        guard let id = currentChatID, let s = chats.session(id), !s.messages.isEmpty else { return }
+        withAnimation(LX.M.hover) { chats.togglePin(id) }
     }
 
-    private func tick() {
-        guard streamIndex < streamSource.endIndex else { finish(); return }
-        let end = streamSource.index(streamIndex, offsetBy: 2, limitedBy: streamSource.endIndex) ?? streamSource.endIndex
-        streamedText += streamSource[streamIndex..<end]
-        streamIndex = end
-        liveTPS = 46.5 + Double.random(in: 0...3)
+    func send(_ text: String) {
+        let id = ensureCurrentChat()
+        chats.send(text, in: id)
     }
 
     func stop() {
-        streamTimer?.invalidate()
-        streamTimer = nil
-        if phase == .generating { phase = .conversation }
+        if let id = currentChatID { chats.stop(id) }
     }
 
-    private func finish() {
-        streamTimer?.invalidate()
-        streamTimer = nil
-        liveTPS = 48.6
-        phase = .conversation
+    func deleteChat(_ id: UUID) {
+        chats.delete(id)
+        if currentChatID == id { currentChatID = chats.temporarySessions.first?.id ?? chats.pinnedSessions.first?.id }
     }
 }
