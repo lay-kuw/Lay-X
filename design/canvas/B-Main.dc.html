@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lay X · Midnight Studio · Main Chat</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050506}
+a{color:#9C9CFF}a:hover{color:#BDBDFF}
+.i{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.rail{all:unset;box-sizing:border-box;width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#8B8B97}
+.rail:hover{background:rgba(255,255,255,.05);color:#EDEDF0}
+.ib{all:unset;box-sizing:border-box;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#9A9AA6}
+.ib:hover{background:rgba(255,255,255,.06);color:#EDEDF0}
+.kc{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 4px;border-radius:4px;background:rgba(255,255,255,.06);box-shadow:inset 0 -1px 0 rgba(255,255,255,.04);font-size:10.5px;color:#A6A6B2;font-family:Inter,-apple-system,sans-serif;box-sizing:border-box}
+.mono{font-family:"SF Mono","JetBrains Mono",ui-monospace,monospace}
+.row{all:unset;box-sizing:border-box;display:flex;flex-direction:column;gap:3px;width:100%;padding:9px 10px;border-radius:8px}
+.row:hover{background:rgba(255,255,255,.03)}
+.kv{display:flex;align-items:center;height:26px;font-size:12px;color:#9A9AA6}
+.kv b{margin-left:auto;font-weight:500;color:#EDEDF0;font-family:"SF Mono","JetBrains Mono",monospace;font-size:11.5px;font-variant-numeric:tabular-nums}
+.sec{font-size:10.5px;font-weight:600;letter-spacing:.08em;color:#7C7C88;text-transform:uppercase;margin:0 0 6px}
+.code{font-family:"SF Mono","JetBrains Mono",ui-monospace,monospace;font-size:12.5px;line-height:20px;white-space:pre;color:#D6D6DE}
+.k{color:#C79BFF}.t{color:#7FD1C7}.s{color:#FF9E80}.n{color:#E6C07B}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+.caret{display:inline-block;width:8px;height:16px;background:#8B8BFF;vertical-align:-3px;margin-left:2px;animation:blink 1s steps(1) infinite}
+.live{width:6px;height:6px;border-radius:50%;background:#8B8BFF;box-shadow:0 0 8px #8B8BFF;animation:pulse 1.2s ease-in-out infinite}
+</style>
+</helmet>
+<div style="width:1440px;height:900px;display:flex;border-radius:12px;overflow:hidden;background:#0B0B0E;font-family:Inter,-apple-system,'SF Pro Text','Hiragino Sans',sans-serif;color:#EDEDF0;-webkit-font-smoothing:antialiased;box-shadow:0 0 0 1px rgba(255,255,255,.1)">
+
+  <!-- Rail -->
+  <nav aria-label="Sections" style="width:72px;flex:none;display:flex;flex-direction:column;align-items:center;gap:4px;padding:16px 0 14px;background:#08080A;border-right:1px solid rgba(255,255,255,.05);box-sizing:border-box">
+    <div style="display:flex;gap:8px;margin-bottom:22px">
+      <span style="width:12px;height:12px;border-radius:50%;background:#FF5F57"></span><span style="width:12px;height:12px;border-radius:50%;background:#FEBC2E"></span><span style="width:12px;height:12px;border-radius:50%;background:#28C840"></span>
+    </div>
+    <button class="rail" aria-label="Chat ⌘1" style="background:rgba(139,139,255,.14);color:#B4B4FF"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:18px;height:18px"><path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h9A2.5 2.5 0 0 1 17 5.5v6a2.5 2.5 0 0 1-2.5 2.5H8l-4 3v-3.2A2.5 2.5 0 0 1 3 11.5z"/></svg></button>
+    <button class="rail" aria-label="Work ⌘2"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:18px;height:18px"><path d="M2.5 6A1.5 1.5 0 0 1 4 4.5h3.6l1.6 1.8H16a1.5 1.5 0 0 1 1.5 1.5V15a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 15z"/></svg></button>
+    <button class="rail" aria-label="Models ⌘3"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:18px;height:18px"><path d="M10 2.5l6.5 3.6v7.8L10 17.5l-6.5-3.6V6.1z"/><path d="M3.5 6.1L10 9.7l6.5-3.6M10 9.7v7.8"/></svg></button>
+    <button class="rail" aria-label="Performance ⌘4"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:18px;height:18px"><path d="M3 16.5h14M5.5 13.5v-3M9 13.5v-7M12.5 13.5v-5M16 13.5V4"/></svg></button>
+    <button class="rail" aria-label="API Server ⌘5" style="position:relative"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:18px;height:18px"><rect x="3" y="3.5" width="14" height="5" rx="1.5"/><rect x="3" y="11.5" width="14" height="5" rx="1.5"/><path d="M6 6h.01M6 14h.01"/></svg><span style="position:absolute;right:8px;top:8px;width:6px;height:6px;border-radius:50%;background:#3DDC97;box-shadow:0 0 0 2px #08080A"></span></button>
+    <span style="flex:1"></span>
+    <button class="rail" aria-label="Settings"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:18px;height:18px"><circle cx="10" cy="10" r="2.5"/><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4"/></svg></button>
+  </nav>
+
+  <!-- Chat list -->
+  <section aria-label="Chats" style="width:268px;flex:none;display:flex;flex-direction:column;background:#0E0E11;border-right:1px solid rgba(255,255,255,.05);box-sizing:border-box">
+    <div style="height:52px;display:flex;align-items:center;gap:8px;padding:0 10px 0 16px">
+      <h2 style="margin:0;font-size:14px;font-weight:600;letter-spacing:-.01em">Chats</h2>
+      <span style="flex:1"></span>
+      <button class="ib" aria-label="Search"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:15px;height:15px"><circle cx="9" cy="9" r="5.5"/><path d="M13 13l4 4"/></svg></button>
+      <button class="ib" onClick="{{newChat}}" aria-label="New chat ⌘N"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:15px;height:15px"><path d="M10 4v12M4 10h12"/></svg></button>
+    </div>
+    <div style="padding:0 8px;display:flex;flex-direction:column">
+      <div class="sec" style="padding:10px 10px 4px">Session · not saved</div>
+      <sc-if value="{{notPinned}}" hint-placeholder-val="{{true}}">
+        <button class="row" style="background:rgba(139,139,255,.1);box-shadow:inset 0 0 0 1px rgba(139,139,255,.22)">
+          <span style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:500"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:13px;height:13px;color:#9C9CFF"><circle cx="10" cy="10" r="7" stroke-dasharray="2.2 2.2"/><path d="M10 6.5V10l2.5 1.5"/></svg>{{chatTitle}}<span style="margin-left:auto;font-size:11px;color:#7C7C88;font-weight:400" class="mono">now</span></span>
+          <span lang="ja" style="font-size:12px;color:#9A9AA6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:20px">トークンごとにViewを更新しない…</span>
+        </button>
+      </sc-if>
+      <button class="row">
+        <span style="display:flex;align-items:center;gap:7px;font-size:13px"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:13px;height:13px;color:#7C7C88"><circle cx="10" cy="10" r="7" stroke-dasharray="2.2 2.2"/><path d="M10 6.5V10l2.5 1.5"/></svg>Regex for log lines<span style="margin-left:auto;font-size:11px;color:#7C7C88" class="mono">12m</span></span>
+        <span style="font-size:12px;color:#9A9AA6;padding-left:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">^\[(\d{4}-\d{2}-\d{2})\]\s+(WARN|ERR)…</span>
+      </button>
+
+      <div class="sec" style="padding:18px 10px 4px">Pinned</div>
+      <sc-if value="{{pinned}}" hint-placeholder-val="{{false}}">
+        <button class="row" style="background:rgba(139,139,255,.1);box-shadow:inset 0 0 0 1px rgba(139,139,255,.22)">
+          <span style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:500"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:13px;height:13px;color:#9C9CFF"><path d="M7 3h6l-1 5 3 3H5l3-3z"/><path d="M10 11v6"/></svg>MLX streaming in SwiftUI<span style="margin-left:auto;font-size:11px;color:#7C7C88;font-weight:400" class="mono">now</span></span>
+          <span lang="ja" style="font-size:12px;color:#9A9AA6;padding-left:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">トークンごとにViewを更新しない…</span>
+        </button>
+      </sc-if>
+      <button class="row">
+        <span style="display:flex;align-items:center;gap:7px;font-size:13px"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:13px;height:13px;color:#7C7C88"><path d="M7 3h6l-1 5 3 3H5l3-3z"/><path d="M10 11v6"/></svg>Q1 roadmap — local-first<span style="margin-left:auto;font-size:11px;color:#7C7C88" class="mono">2d</span></span>
+        <span style="font-size:12px;color:#9A9AA6;padding-left:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Milestones: Mini Chat beta, Work diff…</span>
+      </button>
+      <button class="row">
+        <span style="display:flex;align-items:center;gap:7px;font-size:13px"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:13px;height:13px;color:#7C7C88"><path d="M7 3h6l-1 5 3 3H5l3-3z"/><path d="M10 11v6"/></svg>Prompt library · Review<span style="margin-left:auto;font-size:11px;color:#7C7C88" class="mono">5d</span></span>
+        <span style="font-size:12px;color:#9A9AA6;padding-left:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">You are a meticulous code reviewer…</span>
+      </button>
+      <button class="row">
+        <span lang="ja" style="display:flex;align-items:center;gap:7px;font-size:13px"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:13px;height:13px;color:#7C7C88"><path d="M7 3h6l-1 5 3 3H5l3-3z"/><path d="M10 11v6"/></svg>日本語の要約テンプレート<span style="margin-left:auto;font-size:11px;color:#7C7C88" class="mono">1w</span></span>
+        <span lang="ja" style="font-size:12px;color:#9A9AA6;padding-left:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">結論 → 根拠 → 次のアクション…</span>
+      </button>
+    </div>
+    <span style="flex:1"></span>
+    <div style="margin:10px;padding:10px 12px;border-radius:10px;background:#131317;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05);display:flex;align-items:center;gap:8px;font-size:12px;color:#9A9AA6"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:14px;height:14px"><circle cx="9" cy="9" r="5.5"/><path d="M13 13l4 4"/></svg>Command palette<span style="flex:1"></span><span class="kc">⌘K</span></div>
+  </section>
+
+  <!-- Thread -->
+  <main style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <header style="height:52px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px 0 22px;border-bottom:1px solid rgba(255,255,255,.05)">
+      <span style="font-size:13px;color:#7C7C88">{{crumb}}</span><span style="font-size:13px;color:#5A5A66">/</span><span style="font-size:13px;font-weight:500">{{chatTitle}}</span>
+      <sc-if value="{{notPinned}}" hint-placeholder-val="{{true}}">
+        <span class="mono" style="margin-left:6px;height:20px;padding:0 7px;border-radius:5px;font-size:10.5px;color:#B4B4FF;background:rgba(139,139,255,.12);display:flex;align-items:center;letter-spacing:.04em">TEMP</span>
+      </sc-if>
+      <span style="flex:1"></span>
+      <button onClick="{{togglePin}}" aria-label="{{pinLabel}}" style="all:unset;display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:7px;font-size:12px;font-weight:500;color:{{pinColor}};background:{{pinBg}};box-shadow:inset 0 0 0 1px rgba(255,255,255,.07)"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:13px;height:13px"><path d="M7 3h6l-1 5 3 3H5l3-3z"/><path d="M10 11v6"/></svg>{{pinLabel}}<span class="kc">⌘P</span></button>
+      <button class="ib" aria-label="More"><svg class="i" viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r=".6" fill="currentColor"/><circle cx="10" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/></svg></button>
+    </header>
+
+    <sc-if value="{{isEmpty}}" hint-placeholder-val="{{false}}">
+      <div style="flex:1;display:flex;align-items:center;justify-content:center">
+        <div style="width:440px;display:flex;flex-direction:column;gap:18px">
+          <div>
+            <div class="mono" style="font-size:11px;color:#9C9CFF;letter-spacing:.08em">NEW · TEMPORARY</div>
+            <h1 style="margin:8px 0 0;font-size:22px;font-weight:600;letter-spacing:-.02em">Start typing. Nothing leaves this Mac.</h1>
+          </div>
+          <div style="border-radius:12px;background:#111114;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);padding:6px">
+            <button onClick="{{start}}" style="all:unset;box-sizing:border-box;width:100%;display:flex;align-items:center;gap:10px;height:36px;padding:0 10px;border-radius:7px;background:rgba(255,255,255,.04);font-size:13px">Ask Qwen3 14B<span style="flex:1"></span><span class="kc">↵</span></button>
+            <div style="display:flex;align-items:center;gap:10px;height:36px;padding:0 10px;font-size:13px;color:#C8C8D0">Switch model<span style="flex:1"></span><span class="kc">⌘M</span></div>
+            <div style="display:flex;align-items:center;gap:10px;height:36px;padding:0 10px;font-size:13px;color:#C8C8D0">Load system prompt<span style="flex:1"></span><span class="kc">⌘⇧S</span></div>
+            <div style="display:flex;align-items:center;gap:10px;height:36px;padding:0 10px;font-size:13px;color:#C8C8D0">Pin this chat<span style="flex:1"></span><span class="kc">⌘P</span></div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{hasThread}}" hint-placeholder-val="{{true}}">
+      <div style="flex:1;min-height:0;overflow:hidden;padding:0 40px">
+        <div style="max-width:760px;margin:0 auto;padding-top:22px">
+          <article style="padding:0 0 20px;border-bottom:1px solid rgba(255,255,255,.05)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="width:20px;height:20px;border-radius:6px;background:#26262E;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#C8C8D0">K</span><span style="font-size:12.5px;font-weight:600">You</span><span class="mono" style="font-size:11px;color:#7C7C88">14:02:11</span></div>
+            <p lang="ja" style="margin:0;padding-left:28px;font-size:14px;line-height:23px;color:#DCDCE2">MLX Swiftでトークンをストリーミングしながら、SwiftUIのテキストを滑らかに更新したい。再描画が多すぎて重くなるのを避けるには？</p>
+          </article>
+          <article style="padding:20px 0 0">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+              <span style="width:20px;height:20px;border-radius:6px;background:linear-gradient(140deg,#5B5BFF,#8E6BFF);display:flex;align-items:center;justify-content:center"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:12px;height:12px;color:#FFFFFF"><path d="M5 5l10 10M15 5L5 15"/></svg></span>
+              <span style="font-size:12.5px;font-weight:600">Qwen3 14B</span><span class="mono" style="font-size:11px;color:#7C7C88">4-bit · MLX</span>
+              <span style="flex:1"></span>
+              <sc-if value="{{isConv}}" hint-placeholder-val="{{true}}"><span class="mono" style="font-size:11px;color:#9A9AA6;font-variant-numeric:tabular-nums">412 tok · 48.6 tok/s · 8.5 s</span></sc-if>
+              <sc-if value="{{isGen}}" hint-placeholder-val="{{false}}"><span class="mono" style="font-size:11px;color:#B4B4FF;display:flex;align-items:center;gap:7px"><span class="live"></span>streaming · 47.9 tok/s</span></sc-if>
+            </div>
+            <div style="padding-left:28px;display:flex;flex-direction:column;gap:12px">
+              <sc-if value="{{isConv}}" hint-placeholder-val="{{true}}">
+                <p lang="ja" style="margin:0;font-size:14px;line-height:24px;color:#DCDCE2">ポイントは<b style="font-weight:600;color:#FFFFFF">トークンごとにViewを更新しない</b>ことです。生成ループ側でバッファし、約30msごとにまとめてMainActorへ流すと、体感の滑らかさを保ったまま再描画を大幅に減らせます。</p>
+                <div style="border-radius:10px;background:#07070A;box-shadow:inset 0 0 0 1px rgba(255,255,255,.07);overflow:hidden">
+                  <div style="height:32px;display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;border-bottom:1px solid rgba(255,255,255,.05);font-size:11px;color:#9A9AA6" class="mono">swift<span style="color:#5A5A66">·</span>StreamBuffer.swift<span style="flex:1"></span><button class="ib" style="width:24px;height:24px" aria-label="Copy code"><svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:13px;height:13px"><rect x="7" y="7" width="9.5" height="9.5" rx="2"/><path d="M13 7V5a1.5 1.5 0 0 0-1.5-1.5h-6A1.5 1.5 0 0 0 4 5v6.5A1.5 1.5 0 0 0 5.5 13H7"/></svg></button></div>
+<div class="code" style="padding:12px 14px"><span class="k">@MainActor</span> <span class="k">final class</span> <span class="t">StreamBuffer</span>: <span class="t">ObservableObject</span> {
+    <span class="k">@Published private(set) var</span> text = <span class="s">""</span>
+    <span class="k">private var</span> pending = <span class="s">""</span>
+    <span class="k">private var</span> flushTask: <span class="t">Task</span>&lt;<span class="t">Void</span>, <span class="t">Never</span>&gt;?
+
+    <span class="k">func</span> append(<span class="k">_</span> token: <span class="t">String</span>) {
+        pending += token
+        <span class="k">guard</span> flushTask == <span class="k">nil</span> <span class="k">else</span> { <span class="k">return</span> }
+        flushTask = <span class="t">Task</span> {
+            <span class="k">try</span>? <span class="k">await</span> <span class="t">Task</span>.sleep(for: .milliseconds(<span class="n">30</span>))
+            text += pending; pending = <span class="s">""</span>; flushTask = <span class="k">nil</span>
+        }
+    }
+}</div>
+                </div>
+                <p lang="ja" style="margin:0;font-size:14px;line-height:24px;color:#DCDCE2">長文は段落単位で <code class="mono" style="font-size:12.5px;color:#C79BFF">LazyVStack</code> に並べ、スクロール追従は末尾アンカーのみ更新します。</p>
+              </sc-if>
+              <sc-if value="{{isGen}}" hint-placeholder-val="{{false}}">
+                <p lang="ja" style="margin:0;font-size:14px;line-height:24px;color:#DCDCE2">ポイントは<b style="font-weight:600;color:#FFFFFF">トークンごとにViewを更新しない</b>ことです。生成ループ側でバッファし、約30msごとに<span class="caret"></span></p>
+              </sc-if>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div style="flex:none;padding:0 40px 16px">
+        <div style="max-width:760px;margin:0 auto;border-radius:12px;background:#121216;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),0 -12px 30px rgba(11,11,14,.9);overflow:hidden">
+          <label style="display:block;padding:14px 16px 10px"><span style="position:absolute;left:-9999px">Message</span><input placeholder="Message Qwen3 14B   ·   / for commands" style="all:unset;width:100%;font-size:14px;color:#EDEDF0"></label>
+          <div style="height:40px;display:flex;align-items:center;gap:6px;padding:0 8px 0 10px;border-top:1px solid rgba(255,255,255,.05)">
+            <button style="all:unset;display:flex;align-items:center;gap:6px;height:26px;padding:0 8px;border-radius:6px;background:rgba(255,255,255,.05);font-size:12px;color:#DCDCE2"><span style="width:6px;height:6px;border-radius:50%;background:#3DDC97"></span>Qwen3 14B<svg class="i" viewBox="0 0 20 20" aria-hidden="true" style="width:11px;height:11px"><path d="M6 8l4 4 4-4"/></svg></button>
+            <button style="all:unset;height:26px;padding:0 8px;border-radius:6px;font-size:12px;color:#9A9AA6;display:flex;align-items:center">System: Swift expert</button>
+            <button style="all:unset;height:26px;padding:0 8px;border-radius:6px;font-size:12px;color:#9A9AA6;display:flex;align-items:center" class="mono">temp 0.7</button>
+            <span style="flex:1"></span>
+            <span style="display:flex;align-items:center;gap:7px;font-size:11px;color:#9A9AA6" class="mono"><span style="width:56px;height:3px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden;display:flex"><span style="width:7%;background:#8B8BFF"></span></span>2.1k/32k</span>
+            <sc-if value="{{isGen}}" hint-placeholder-val="{{false}}">
+              <button onClick="{{stop}}" style="all:unset;display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:7px;background:rgba(255,255,255,.08);font-size:12px;font-weight:500">Stop<span class="kc">esc</span></button>
+            </sc-if>
+            <sc-if value="{{isConv}}" hint-placeholder-val="{{true}}">
+              <button aria-label="Send" style="all:unset;display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:7px;background:{{accent}};font-size:12px;font-weight:600;color:#0B0B0E">Send<span style="font-size:11px;opacity:.7">⌘↩</span></button>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+  </main>
+
+  <!-- Inspector -->
+  <aside aria-label="Inspector" style="width:288px;flex:none;background:#0E0E11;border-left:1px solid rgba(255,255,255,.05);display:flex;flex-direction:column;box-sizing:border-box">
+    <div style="height:52px;display:flex;align-items:center;padding:0 16px;border-bottom:1px solid rgba(255,255,255,.05);font-size:12.5px;font-weight:600;gap:6px">Inspector<span style="flex:1"></span><span class="kc">⌘I</span></div>
+    <div style="padding:16px;display:flex;flex-direction:column;gap:22px">
+      <section>
+        <h3 class="sec">Live</h3>
+        <div style="border-radius:10px;background:#131317;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05);padding:12px 12px 8px">
+          <div style="display:flex;align-items:baseline;gap:6px"><span class="mono" style="font-size:26px;font-weight:500;letter-spacing:-.02em;font-variant-numeric:tabular-nums">{{tps}}</span><span style="font-size:11.5px;color:#9A9AA6">decode tok/s</span><span style="flex:1"></span><sc-if value="{{isGen}}" hint-placeholder-val="{{false}}"><span class="live"></span></sc-if></div>
+          <svg viewBox="0 0 240 44" width="100%" height="44" role="img" aria-label="Decode speed over the last 8 seconds, steady near 48 tokens per second" style="display:block;margin-top:6px"><path d="M0 30 L18 14 L36 12 L54 13 L72 11 L90 12 L108 11 L126 13 L144 12 L162 11 L180 12 L198 12 L216 11 L240 12" fill="none" stroke="#8B8BFF" stroke-width="1.6" stroke-linejoin="round"/><path d="M0 30 L18 14 L36 12 L54 13 L72 11 L90 12 L108 11 L126 13 L144 12 L162 11 L180 12 L198 12 L216 11 L240 12 V44 H0Z" fill="rgba(139,139,255,.1)"/></svg>
+        </div>
+        <div class="kv">Time to first token<b>182 ms</b></div>
+        <div class="kv">Prefill<b>1,240 tok/s</b></div>
+        <div class="kv">Tokens generated<b>{{tok}}</b></div>
+      </section>
+      <section>
+        <h3 class="sec">Memory</h3>
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:#9A9AA6;margin-bottom:7px"><span>Unified memory</span><span class="mono" style="color:#EDEDF0">18.4 / 64 GB</span></div>
+        <div style="height:6px;border-radius:3px;background:rgba(255,255,255,.06);display:flex;overflow:hidden;gap:2px"><span style="width:14%;background:#8B8BFF"></span><span style="width:6%;background:#5E5EC8"></span><span style="width:9%;background:#3A3A48"></span></div>
+        <div style="display:flex;gap:12px;margin-top:8px;font-size:11px;color:#9A9AA6"><span style="display:flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:2px;background:#8B8BFF"></span>Weights 9.1</span><span style="display:flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:2px;background:#5E5EC8"></span>KV 3.6</span><span style="display:flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:2px;background:#3A3A48"></span>System</span></div>
+      </section>
+      <section>
+        <h3 class="sec">Model</h3>
+        <div class="kv">Name<b>qwen3-14b-4bit</b></div>
+        <div class="kv">Context<b>32,768</b></div>
+        <div class="kv">Size on disk<b>8.3 GB</b></div>
+      </section>
+      <section>
+        <h3 class="sec">Sampling</h3>
+        <div class="kv">Temperature<b>0.70</b></div>
+        <div class="kv">Top-p<b>0.95</b></div>
+        <div class="kv">Max tokens<b>4,096</b></div>
+      </section>
+    </div>
+  </aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"state":{"editor":"enum","options":["conversation","generating","empty"],"default":"conversation"},"accent":{"editor":"color","default":"#8B8BFF","options":["#8B8BFF","#6E9BFF","#3DDC97","#F5A97F"]},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const s = this.state || {};
+    const view = s.view || this.props.state || 'conversation';
+    const pinned = !!s.pinned;
+    const accent = this.props.accent ?? '#8B8BFF';
+    return {
+      accent,
+      isEmpty: view === 'empty',
+      hasThread: view !== 'empty',
+      isConv: view === 'conversation',
+      isGen: view === 'generating',
+      pinned,
+      notPinned: !pinned,
+      crumb: pinned ? 'Pinned' : 'Session',
+      chatTitle: view === 'empty' ? 'Untitled' : 'MLX streaming in SwiftUI',
+      tps: view === 'generating' ? '47.9' : (view === 'empty' ? '—' : '48.6'),
+      tok: view === 'generating' ? '86' : (view === 'empty' ? '0' : '412'),
+      pinLabel: pinned ? 'Pinned' : 'Pin',
+      pinColor: pinned ? '#0B0B0E' : '#DCDCE2',
+      pinBg: pinned ? accent : 'rgba(255,255,255,.04)',
+      togglePin: () => this.setState({ pinned: !pinned }),
+      newChat: () => this.setState({ view: 'empty', pinned: false }),
+      start: () => this.setState({ view: 'generating' }),
+      stop: () => this.setState({ view: 'conversation' })
+    };
+  }
+}
+</script>
+</body>
+</html>
