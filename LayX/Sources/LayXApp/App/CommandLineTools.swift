@@ -18,7 +18,7 @@ nonisolated enum CommandLineTools {
         case "--mlx-selftest":
             print("mlx-selftest: \(MLXSelfTest.run())")
             exit(0)
-        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check":
+        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check", "--preempt-check":
             Task.detached {
                 do {
                     try await run(args)
@@ -35,7 +35,7 @@ nonisolated enum CommandLineTools {
     }
 
     /// Commands handled headlessly; anything else starts the GUI.
-    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check"]
+    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check", "--preempt-check"]
 
     private static func run(_ args: [String]) async throws {
         let store = ModelStore(root: try ModelStore.defaultRoot())
@@ -205,6 +205,39 @@ nonisolated enum CommandLineTools {
                 throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "")
             }
             try await CacheCheck.run(model: model)
+        case "--preempt-check":
+            guard args.count >= 3, let id = ModelRepoID(args[2]), let model = store.installedModel(id) else {
+                throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "")
+            }
+            let coordinator = InferenceCoordinator(engine: MLXEngine())
+            try await coordinator.load(model.reference)
+            let longFile = (1...(Int(ProcessInfo.processInfo.environment["LAYX_PREEMPT_LINES"] ?? "120") ?? 120)).map { "let value\($0) = compute(\($0)) // step \($0)" }.joined(separator: "\n")
+            func gen(_ text: String, _ client: InferenceClient, _ max: Int) async throws -> String {
+                let messages = client == .work
+                    ? [PromptMessage(role: .system, content: WorkPrompt.system),
+                       PromptMessage(role: .user, content: "Relevant files:\n----- BEGIN FILE A.swift -----\n\(longFile)\n----- END FILE A.swift -----\n\nUser request:\n\(text)")]
+                    : [PromptMessage(role: .user, content: text)]
+                let req = GenerationRequest(messages: messages,
+                                            parameters: GenerationParameters(temperature: 0, maxTokens: max, seed: 0), client: client, thinking: false)
+                var out = ""
+                for try await e in coordinator.generate(req) { if case .text(let t) = e { out += t } }
+                return out
+            }
+            let prompt = "Explain step by step what A.swift computes, then rewrite it as a loop."
+            let alone = try await gen(prompt, .work, 400)
+            await coordinator.discardCaches(key: nil)
+            let work = Task { try await gen(prompt, .work, 400) }
+            try await Task.sleep(for: .milliseconds(Int(ProcessInfo.processInfo.environment["LAYX_PREEMPT_MS"] ?? "1500") ?? 1500))
+            let chat = try await gen("What is the capital of Italy? One word.", .chat, 8)
+            let interrupted = try await work.value
+            print("chat: \(chat.trimmingCharacters(in: .whitespacesAndNewlines))")
+            print("identical: \(alone == interrupted)")
+            if alone != interrupted {
+                let n = zip(alone, interrupted).prefix { $0 == $1 }.count
+                print("diverges at char \(n)")
+                print("alone:       …\(alone.dropFirst(max(0, n - 60)).prefix(160))")
+                print("interrupted: …\(interrupted.dropFirst(max(0, n - 60)).prefix(160))")
+            }
         case "--search":
             let support = MLXArchitectureSupport()
             for r in try await HubAPI().search(args.count >= 3 ? args[2] : "", limit: 12) {

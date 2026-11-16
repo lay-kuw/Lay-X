@@ -209,7 +209,10 @@ public actor InferenceCoordinator {
             continuation.finish(throwing: error)
             return
         }
-        defer { releaseGeneration(slot) }
+        defer {
+            req.pauseGate?.markDone()
+            releaseGeneration(slot)
+        }
         guard model.loadedModel != nil else {
             continuation.finish(throwing: InferenceError.noModelLoaded)
             return
@@ -275,6 +278,8 @@ public actor InferenceCoordinator {
                 overlay = (id, client)
                 ownerGate?.pause()
                 publish()
+                // Never run two generations at once: wait until the paused one has stopped at a token boundary.
+                await ownerGate?.waitUntilParked()
                 return .overlay
             }
             guard overlayWaiters.count < maxQueued else { throw InferenceError.queueFull }

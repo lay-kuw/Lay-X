@@ -47,7 +47,6 @@ struct ChatScreen: View {
             ModelPicker(open: $pickerOpen)
             Text("/").font(LX.F.body).foregroundStyle(Color(hex: 0x5E6172))
             ChatTitle()
-            if session?.isPinned != true { Tag(text: "TEMP", color: LX.C.accentText) }
         } trailing: {
             let metrics = session?.messages.last(where: { $0.metrics != nil })?.metrics
             MetricsStrip(
@@ -120,28 +119,29 @@ struct ModelPicker: View {
 
     var body: some View {
         Button { withAnimation(LX.M.mini) { open.toggle() } } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 7) {
                 Group {
                     if isLoading {
-                        ProgressView().controlSize(.small)
+                        ProgressView().controlSize(.mini)
                     } else {
-                        Image(systemName: "cpu").font(.system(size: 15, weight: .regular)).foregroundStyle(LX.C.accentText)
+                        Image(systemName: "cpu").font(.system(size: 12)).foregroundStyle(LX.C.accentText)
                     }
                 }
-                .frame(width: 20, height: 20)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
-                    Text(subtitle).font(LX.F.ui(11)).foregroundStyle(LX.C.tertiary).lineLimit(1)
+                .frame(width: 14, height: 14)
+                Text(title).font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
+                if !subtitle.isEmpty {
+                    Text(subtitle).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
                 }
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(LX.C.tertiary)
                     .rotationEffect(.degrees(open ? 180 : 0))
-                    .padding(.leading, 6)
             }
-            .padding(.leading, 8).padding(.trailing, 10).frame(height: 40)
+            .padding(.horizontal, 6).frame(height: 28)
             .background(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous).fill(Color.white.opacity(open ? 0.06 : (hover ? 0.04 : 0))))
             .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleStyle())
+        // Align the icon with the leading icon/title of the other screens' headers.
+        .padding(.leading, -6)
         .onHover { h in withAnimation(LX.M.hover) { hover = h } }
         .help("Choose model")
         .background { Button("") { withAnimation(LX.M.mini) { open.toggle() } }.keyboardShortcut("m").opacity(0) }

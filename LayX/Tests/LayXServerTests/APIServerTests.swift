@@ -27,6 +27,7 @@ actor FakeEngine: InferenceEngine {
     nonisolated func generate(_ request: GenerationRequest) -> AsyncThrowingStream<GenerationEvent, Error> {
         AsyncThrowingStream { c in
             let task = Task {
+                request.pauseGate?.arm()
                 await self.record(request)
                 do {
                     for t in tokens { try await Task.sleep(for: delay); c.yield(.text(t)) }

@@ -84,6 +84,7 @@ struct WorkProjectView: View {
                         .padding(.horizontal, 7).frame(height: 20)
                         .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
                 }
+                WorkModelBadge()
             } trailing: {
                 HStack(spacing: 10) {
                     if busy {
@@ -180,6 +181,12 @@ struct WorkProjectView: View {
                 .font(.system(size: 11)).foregroundStyle(node.isDirectory ? LX.C.accent : LX.C.tertiary)
             Text(node.name).font(LX.F.bodySmall).lineLimit(1)
             Spacer(minLength: 4)
+            if let activity = fileActivity(node.path) {
+                Image(systemName: activity.symbol)
+                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(LX.C.liveCyan)
+                    .symbolEffect(.pulse, options: .repeating)
+                    .help(activity.help)
+            }
             if let status {
                 Text(status).font(LX.F.mono(10.5)).foregroundStyle(status == "A" ? LX.C.ok : LX.C.warn)
             }
@@ -198,6 +205,26 @@ struct WorkProjectView: View {
                 session.focusPath = node.path
             }
         }
+    }
+
+    /// Live activity for a file in the tree: being written (proposal output) or read (sent to the model).
+    private func fileActivity(_ path: String) -> (symbol: String, help: String)? {
+        guard busy else { return nil }
+        if session.phase == .generating, let writing = currentWritePath, writing == path {
+            return ("pencil", "Writing a proposal for this file")
+        }
+        if session.contextFiles.contains(path) {
+            return ("eye", session.phase == .reading ? "Reading this file" : "The model is using this file")
+        }
+        return nil
+    }
+
+    /// Path of the file block currently being written in the live output.
+    private var currentWritePath: String? {
+        let text = session.liveText
+        guard let r = text.range(of: "<<<FILE ", options: .backwards), !text[r.upperBound...].contains("FILE>>>") else { return nil }
+        let path = text[r.upperBound...].prefix { !$0.isNewline }.trimmingCharacters(in: .whitespaces)
+        return path.isEmpty ? nil : path
     }
 
     // MARK: Diff / preview
@@ -595,5 +622,28 @@ struct SplitDiffRow: View {
         .frame(maxHeight: .infinity)
         .background(changed ? (isLeft ? LX.C.errorBar.opacity(0.09) : LX.C.ok.opacity(0.08)) : .clear)
         .overlay(alignment: .leading) { Rectangle().fill(changed ? (isLeft ? LX.C.errorBar : LX.C.ok) : .clear).frame(width: 2) }
+    }
+}
+
+/// Model used by Work (display only — choose it in Chat's picker or Settings → Models & Inference).
+struct WorkModelBadge: View {
+    @Environment(InferenceStatusModel.self) private var inference
+    private var library: ModelLibrary { AppServices.shared.models }
+
+    var body: some View {
+        let loaded = inference.loadedModel.flatMap { library.model($0.id) }
+        let model = loaded ?? WorkProjects.defaultWorkModel(in: library)
+        if let model {
+            HStack(spacing: 5) {
+                Image(systemName: "cpu").font(.system(size: 10))
+                Text(ModelDisplay.split(model.id).name).font(LX.F.ui(11.5, .medium))
+                Text(ModelDisplay.subtitle(model, withSize: false)).font(LX.F.mono(10)).foregroundStyle(LX.C.tertiary)
+                if loaded == nil { Text("· not loaded").font(LX.F.mono(10)).foregroundStyle(LX.C.tertiary) }
+            }
+            .foregroundStyle(LX.C.secondary)
+            .lineLimit(1)
+            .padding(.leading, 6)
+            .help("Model used by Work")
+        }
     }
 }

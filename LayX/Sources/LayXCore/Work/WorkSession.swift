@@ -141,6 +141,8 @@ public final class WorkSession {
     public private(set) var phase: Phase = .idle
     public private(set) var turns: [Turn] = []
     public private(set) var liveText = ""
+    /// Files whose contents were given to the model for the current/last proposal.
+    public private(set) var contextFiles: Set<String> = []
     public var changeSet: ChangeSet?
     public private(set) var error: String?
     public private(set) var notice: String?
@@ -204,6 +206,7 @@ public final class WorkSession {
         let context = model.contextLength ?? 8192
         let budget = max(1024, min(context * 6 / 10, 24_000) - 1024)
         let selection = ContextBuilder.select(request: request, entries: entries, focus: focusPath, in: workspace, tokenBudget: budget)
+        contextFiles = Set(selection.files.map(\.path))
         let prompt = [PromptMessage(role: .system, content: WorkPrompt.system(instructions: instructions())),
                       PromptMessage(role: .user, content: WorkPrompt.user(request: request, selection: selection, workspaceName: workspace.name))]
         let maxOut = max(1024, min(context - selection.estimatedTokens - 512, 8192))

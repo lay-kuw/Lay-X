@@ -33,6 +33,11 @@ struct LayXApplication: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1440, height: 900)
         .commands {
+            // Only the "Lay X" menu is visible (see MenuBarHider); these give it Settings and Mini Chat.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { state.screen = .settings }.keyboardShortcut(",")
+                Button("Show Mini Chat") { MiniChatController.shared.toggle() }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Chat") { state.newChat() }.keyboardShortcut("n")
                 Button("Open Project…") { state.screen = .work; AppServices.shared.work.openFolder() }.keyboardShortcut("o")
@@ -65,6 +70,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         GlobalHotKey.shared.start { MiniChatController.shared.toggle() }
         installFocusResigner()
+        MenuBarHider.shared.start()
+        installEditShortcuts()
+    }
+
+    /// Text editing shortcuts that normally come from the (now hidden) Edit menu.
+    private func installEditShortcuts() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard flags.contains(.command), !flags.contains(.control), !flags.contains(.option),
+                  let key = event.charactersIgnoringModifiers?.lowercased() else { return event }
+            let selector: Selector? = switch (key, flags.contains(.shift)) {
+            case ("c", false): #selector(NSText.copy(_:))
+            case ("v", false): #selector(NSText.paste(_:))
+            case ("x", false): #selector(NSText.cut(_:))
+            case ("a", false): #selector(NSText.selectAll(_:))
+            case ("z", false): Selector(("undo:"))
+            case ("z", true): Selector(("redo:"))
+            default: nil
+            }
+            guard let selector, NSApp.sendAction(selector, to: nil, from: nil) else { return event }
+            return nil
+        }
     }
 
     /// Clicking anywhere outside the text field that is being edited ends editing (macOS otherwise keeps the
@@ -209,5 +236,51 @@ final class AppState: ObservableObject {
     func deleteChat(_ id: UUID) {
         chats.delete(id)
         if currentChatID == id { currentChatID = chats.temporarySessions.first?.id ?? chats.pinnedSessions.first?.id }
+    }
+}
+
+/// Keeps the menu bar down to the app menu ("Lay X"). SwiftUI rebuilds the main menu when commands change, so
+/// the other top-level menus are re-hidden whenever items are added. Hidden items keep their key equivalents
+/// (`allowsKeyEquivalentWhenHidden`), so ⌘N, ⌘1–5, ⌘P, ⌘I, ⌘O … still work.
+final class MenuBarHider {
+    static let shared = MenuBarHider()
+    private var observers: [NSObjectProtocol] = []
+    private var scheduled = false
+
+    func start() {
+        apply()
+        for name in [NSMenu.didAddItemNotification, NSMenu.didChangeItemNotification, NSApplication.didBecomeActiveNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.schedule() }
+            })
+        }
+    }
+
+    private func schedule() {
+        guard !scheduled else { return }
+        scheduled = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                self?.scheduled = false
+                self?.apply()
+            }
+        }
+    }
+
+    func apply() {
+        guard let main = NSApp.mainMenu else { return }
+        for (index, item) in main.items.enumerated() {
+            item.allowsKeyEquivalentWhenHidden = true
+            Self.allowHiddenKeyEquivalents(item.submenu)
+            let hide = index > 0
+            if item.isHidden != hide { item.isHidden = hide }
+        }
+    }
+
+    private static func allowHiddenKeyEquivalents(_ menu: NSMenu?) {
+        for item in menu?.items ?? [] {
+            if !item.allowsKeyEquivalentWhenHidden { item.allowsKeyEquivalentWhenHidden = true }
+            allowHiddenKeyEquivalents(item.submenu)
+        }
     }
 }

@@ -42,6 +42,7 @@ actor ScriptedEngine: InferenceEngine {
     nonisolated func generate(_ request: GenerationRequest) -> AsyncThrowingStream<GenerationEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
+                request.pauseGate?.arm()
                 await self.record(request)
                 await self.begin()
                 let clock = ContinuousClock()
@@ -49,7 +50,7 @@ actor ScriptedEngine: InferenceEngine {
                 var count = 0
                 do {
                     for t in await self.tokens {
-                        while request.pauseGate?.isPaused == true { try await Task.sleep(for: .milliseconds(2)) }
+                        await request.pauseGate?.waitWhilePausedAsync()
                         try await Task.sleep(for: await self.tokenDelay)
                         await self.emitted(request.client)
                         continuation.yield(.text(t))

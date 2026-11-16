@@ -62,18 +62,45 @@ public enum InferenceClient: String, Sendable, Hashable, Codable {
     public var isPreemptible: Bool { self == .work }
 }
 
-/// Cooperative pause switch for a running generation. Engines check it between tokens
-/// (`waitWhilePaused()`), so a paused generation holds its state but uses no GPU time.
+/// Cooperative pause switch for a running generation. Engines check it between tokens, so a paused generation
+/// holds its state but runs no model work. `parked` confirms the generation has actually stopped at a token
+/// boundary — the coordinator waits for it before starting another generation, because the backend must
+/// never evaluate two generations at the same time (e.g. while the paused one is still prefilling).
 public final class PauseGate: Sendable {
-    private let paused = Mutex(false)
+    private struct State { var paused = false, parked = false, done = false, armed = false }
+    private let state = Mutex(State())
     public init() {}
-    public var isPaused: Bool { paused.withLock { $0 } }
-    public func pause() { paused.withLock { $0 = true } }
-    public func resume() { paused.withLock { $0 = false } }
+    public var isPaused: Bool { state.withLock { $0.paused } }
+    public var isParkedOrDone: Bool { state.withLock { $0.parked || $0.done } }
+    public func pause() { state.withLock { $0.paused = true } }
+    public func resume() { state.withLock { $0.paused = false } }
+    /// Engines call this once the generation may safely stop (e.g. outside any exclusive section such as
+    /// prompt prefill under a model lock). Before that, `waitWhilePaused` never blocks.
+    public func arm() { state.withLock { $0.armed = true } }
+
+    /// The generation finished (or failed / was cancelled); nobody needs to wait for it to park.
+    public func markDone() { state.withLock { $0.done = true; $0.parked = false } }
 
     /// Blocks the calling (generation) thread while paused. Returns early if the task is cancelled.
     public func waitWhilePaused() {
-        while isPaused && !Task.isCancelled { Thread.sleep(forTimeInterval: 0.01) }
+        guard state.withLock({ $0.paused && $0.armed }) else { return }
+        state.withLock { $0.parked = true }
+        while isPaused && !Task.isCancelled { Thread.sleep(forTimeInterval: 0.005) }
+        state.withLock { $0.parked = false }
+    }
+
+    /// Async variant for engines that run on Swift concurrency.
+    public func waitWhilePausedAsync() async {
+        guard state.withLock({ $0.paused && $0.armed }) else { return }
+        state.withLock { $0.parked = true }
+        while isPaused && !Task.isCancelled { try? await Task.sleep(for: .milliseconds(2)) }
+        state.withLock { $0.parked = false }
+    }
+
+    /// Waits until the paused generation is parked (or done). Polls; the wait is at most one token or the
+    /// remainder of a prefill.
+    public func waitUntilParked() async {
+        while !isParkedOrDone && isPaused { try? await Task.sleep(for: .milliseconds(3)) }
     }
 }
 

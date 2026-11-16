@@ -1,5 +1,4 @@
 import AppKit
-import ServiceManagement
 import SwiftUI
 import LayXCore
 import LayXServer
@@ -58,18 +57,9 @@ extension SettingsScreen {
 struct GeneralSettings: View {
     let screen: SettingsScreen
     @AppStorage(AppearancePreferences.quitOnCloseKey) private var quitOnClose = false
-    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
-    @State private var loginError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            screen.group("Startup") {
-                screen.row("Open at login", "Start Lay X when you log in (Mini Chat and the API server become available)") {
-                    Toggle("", isOn: Binding(get: { launchAtLogin }, set: { setLogin($0) }))
-                        .toggleStyle(LXToggleStyle()).labelsHidden().fixedSize()
-                }
-            }
-            if let loginError { Text(loginError).font(LX.F.caption).foregroundStyle(LX.C.error) }
             screen.group("Window") {
                 screen.row("Quit when the main window closes", "Off: Lay X keeps running so Mini Chat and the API server stay available") {
                     Toggle("", isOn: $quitOnClose).toggleStyle(LXToggleStyle()).labelsHidden().fixedSize()
@@ -87,15 +77,6 @@ struct GeneralSettings: View {
         }
     }
 
-    private func setLogin(_ on: Bool) {
-        do {
-            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-            loginError = nil
-        } catch {
-            loginError = "macOS didn’t allow this: \(error.localizedDescription)"
-        }
-        launchAtLogin = SMAppService.mainApp.status == .enabled
-    }
 }
 
 struct PrivacySettings: View {

@@ -283,6 +283,9 @@ public actor MLXEngine: InferenceEngine {
         }
         if evictedAny { Memory.clearCache() }
         let (mlxStream, mlxTask, opensThinking) = (h.stream, h.task, h.opensThinking)
+        // Prefill ran inside the model's exclusive section; only from here on may this generation park
+        // (parking while holding that lock would deadlock the interactive request that paused it).
+        request.pauseGate?.arm()
         let taskID = UUID()
         generationTasks[taskID] = mlxTask
         defer { generationTasks[taskID] = nil }
@@ -304,6 +307,7 @@ public actor MLXEngine: InferenceEngine {
             }
         }
         if Task.isCancelled {
+            request.pauseGate?.markDone()
             request.pauseGate?.resume()
             mlxTask.cancel()
             await mlxTask.value
@@ -311,6 +315,7 @@ public actor MLXEngine: InferenceEngine {
             return
         }
         await mlxTask.value
+        request.pauseGate?.markDone()
         let end = clock.now
 
         let first = firstToken ?? end
