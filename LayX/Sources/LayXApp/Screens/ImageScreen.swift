@@ -7,7 +7,6 @@ import LayXCore
 /// Everything runs on this Mac; models are downloaded once in Models and then work offline.
 struct ImageScreen: View {
     @EnvironmentObject var state: AppState
-    @State private var pickerOpen = false
     private var studio: ImageStudio { AppServices.shared.images }
     private var library: ModelLibrary { AppServices.shared.models }
 
@@ -15,7 +14,7 @@ struct ImageScreen: View {
         let spec = ImagePreferences.spec
         VStack(spacing: 0) {
             ScreenHeader {
-                ImageModelPicker(open: $pickerOpen, spec: spec)
+                ImageModelPicker(open: $state.modelPanelOpen, spec: spec)
             } trailing: {
                 HStack(spacing: 6) {
                     if studio.isBusy { BusyIndicator(help: "Generating") }
@@ -34,16 +33,18 @@ struct ImageScreen: View {
                     Rectangle().fill(LX.C.divider).frame(width: 1)
                     ImageHistoryGrid().frame(width: 236)
                 }
+            } else if !library.imageModels.isEmpty {
+                ChooseImageModelCard().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 NoImageModelCard().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .overlay(alignment: .topLeading) {
-            if pickerOpen {
+            if state.modelPanelOpen {
                 // Same placement as Chat's panel: under the header, aligned with the picker.
                 ZStack(alignment: .topLeading) {
-                    Color.black.opacity(0.001).onTapGesture { withAnimation(LX.M.mini) { pickerOpen = false } }
-                    ImageModelPanel(open: $pickerOpen, selected: spec)
+                    Color.black.opacity(0.001).onTapGesture { withAnimation(LX.M.mini) { state.modelPanelOpen = false } }
+                    ImageModelPanel(open: $state.modelPanelOpen, selected: spec)
                         .padding(.top, LX.S.header + 2).padding(.leading, 12)
                         .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topLeading)))
                 }
@@ -83,7 +84,7 @@ struct ImageModelPicker: View {
                     }
                 }
                 .frame(width: 14, height: 14)
-                Text(spec?.name ?? "No image model").font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary)
+                Text(spec?.name ?? (AppServices.shared.models.imageModels.isEmpty ? "No image model" : "No model selected")).font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary)
                     .lineLimit(1).fixedSize()
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(LX.C.tertiary)
                     .rotationEffect(.degrees(open ? 180 : 0))
@@ -132,6 +133,8 @@ struct ImageModelPanel: View {
             Rectangle().fill(LX.C.divider).frame(height: 1)
             if studio.loadedModelID != nil {
                 PickerRowButton {
+                    // Like Chat: after unloading, no model is shown as chosen.
+                    ImagePreferences.select(nil)
                     Task { await studio.unloadModel() }
                     close()
                 } content: {
@@ -211,6 +214,44 @@ struct ImageModelPanel: View {
             }
             .padding(.horizontal, 9).frame(height: 42)
         }
+    }
+}
+
+/// Shown until an image model is chosen this session: the installed models, one click each.
+struct ChooseImageModelCard: View {
+    private var library: ModelLibrary { AppServices.shared.models }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("IMAGE · ON-DEVICE").font(LX.F.mono(11)).kerning(0.9).foregroundStyle(LX.C.accent)
+                Text("Choose a model").font(LX.F.display).kerning(-0.4)
+                Text("It loads when you generate the first image.")
+                    .font(LX.F.body).foregroundStyle(LX.C.secondary)
+            }
+            VStack(spacing: 2) {
+                ForEach(library.imageModels) { m in
+                    let spec = ImageModelSpec.spec(for: m)
+                    PickerRowButton {
+                        ImagePreferences.select(m.id)
+                    } content: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "paintpalette").font(.system(size: 13)).foregroundStyle(LX.C.tertiary).frame(width: 18)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(spec.name).font(LX.F.ui(12.5, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
+                                Text("\(spec.style) · \(ModelDisplay.bytes(m.diskBytes))").font(LX.F.ui(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+                        }
+                        .padding(.horizontal, 10).frame(height: 44)
+                    }
+                }
+            }
+            .padding(5)
+            .well(radius: LX.R.lg, fill: Color.black.opacity(0.2))
+        }
+        .frame(width: 420)
     }
 }
 
@@ -744,9 +785,10 @@ struct LoRARow: View {
         let on = index != nil
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Checkbox(isOn: Binding(get: { on }, set: { new in
-                    if new { if !studio.activeLoRAs.contains(where: { $0.file == info.file }) { studio.activeLoRAs.append(LoRAChoice(file: info.file, scale: 1)) } }
-                    else { studio.activeLoRAs.removeAll { $0.file == info.file } }
+                let file = info.file
+                Checkbox(isOn: Binding(get: { studio.activeLoRAs.contains { $0.file == file } }, set: { new in
+                    if new { if !studio.activeLoRAs.contains(where: { $0.file == file }) { studio.activeLoRAs.append(LoRAChoice(file: file, scale: 1)) } }
+                    else { studio.activeLoRAs.removeAll { $0.file == file } }
                 }))
                 .disabled(!usable || (!on && full))
                 Text(info.name).font(LX.F.ui(12.5, .medium)).foregroundStyle(usable ? LX.C.primary : LX.C.tertiary)

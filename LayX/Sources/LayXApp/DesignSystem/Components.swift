@@ -551,6 +551,8 @@ struct Checkbox: View {
                 }
             }
             .frame(width: 16, height: 16)
+            // The unchecked box is transparent: without this only its 1 pt outline takes clicks.
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityValue(isOn ? "checked" : "unchecked")

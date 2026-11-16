@@ -32,6 +32,8 @@ public final class ImageStudio {
     /// LoRAs switched on in the composer, with their strengths.
     public var activeLoRAs: [LoRAChoice] = []
     public var selectedID: UUID?
+    /// Image model chosen in the picker for this session (nothing is chosen at launch).
+    public var selectedModelID: String?
     public private(set) var error: String?
     public private(set) var notice: String?
 

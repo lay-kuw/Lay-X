@@ -6,7 +6,6 @@ enum ImagePreferences {
     static let keepLoadedKey = "lx.image.keepLoadedMinutes"      // 0 = unload after each run, -1 = until quit
     static let makeRoomKey = "lx.image.makeRoom"                 // unload an idle chat model when memory is short
     static let countKey = "lx.image.count"
-    static let modelKey = "lx.image.model"
     static let paramsKey = "lx.image.params"                     // per-model steps / CFG / size
     static let lorasKey = "lx.image.activeLoRAs"
 
@@ -16,14 +15,14 @@ enum ImagePreferences {
     }
     static var makeRoom: Bool { UserDefaults.standard.object(forKey: makeRoomKey) as? Bool ?? true }
 
-    /// The model chosen in the Image picker (if installed), else the first installed image model.
+    /// The model chosen in the Image picker this session (nil at launch and after unloading it).
     @MainActor static var spec: ImageModelSpec? {
         let installed = AppServices.shared.models.imageModels
-        let chosen = UserDefaults.standard.string(forKey: modelKey).flatMap { id in installed.first { $0.id.description == id } }
-        return (chosen ?? installed.first).map { ImageModelSpec.spec(for: $0) }
+        guard let id = AppServices.shared.images.selectedModelID else { return nil }
+        return installed.first { $0.id.description == id }.map { ImageModelSpec.spec(for: $0) }
     }
 
-    static func select(_ id: ModelRepoID) { UserDefaults.standard.set(id.description, forKey: modelKey) }
+    @MainActor static func select(_ id: ModelRepoID?) { AppServices.shared.images.selectedModelID = id?.description }
 
     /// Steps, CFG and size remembered per model (defaults from the model).
     struct Params: Codable, Equatable {

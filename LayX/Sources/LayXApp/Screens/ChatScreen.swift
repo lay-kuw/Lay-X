@@ -4,7 +4,6 @@ import LayXCore
 
 struct ChatScreen: View {
     @EnvironmentObject var state: AppState
-    @State private var pickerOpen = false
     @Environment(InferenceStatusModel.self) private var inference
     private var chats: ChatSessionStore { AppServices.shared.chats }
     private var session: ChatSession? { chats.session(state.currentChatID) }
@@ -29,11 +28,11 @@ struct ChatScreen: View {
         }
         .animation(.easeOut(duration: 0.18), value: isEmpty)
         .overlay(alignment: .topLeading) {
-            if pickerOpen {
+            if state.modelPanelOpen {
                 ZStack(alignment: .topLeading) {
                     // Click outside to dismiss.
-                    Color.black.opacity(0.001).onTapGesture { withAnimation(LX.M.mini) { pickerOpen = false } }
-                    ModelPickerPanel(open: $pickerOpen)
+                    Color.black.opacity(0.001).onTapGesture { withAnimation(LX.M.mini) { state.modelPanelOpen = false } }
+                    ModelPickerPanel(open: $state.modelPanelOpen)
                         .padding(.top, LX.S.header + 2).padding(.leading, 12)
                         .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topLeading)))
                 }
@@ -44,7 +43,7 @@ struct ChatScreen: View {
     // MARK: Header
     private var header: some View {
         ScreenHeader {
-            ModelPicker(open: $pickerOpen)
+            ModelPicker(open: $state.modelPanelOpen)
             Text("/").font(LX.F.body).foregroundStyle(Color(hex: 0x5E6172))
             ChatTitle()
         } trailing: {
@@ -158,21 +157,21 @@ struct ModelPicker: View {
         switch inference.snapshot.model {
         case .ready(let info): return library.model(info.id)
         case .loading(let id, _): return library.model(id)
-        default: return AppServices.defaultChatModel(in: library)
+        // Nothing in memory (just launched, unloaded, failed): no model is shown.
+        default: return nil
         }
     }
 
     private var title: String {
         if let m = current { return ModelDisplay.split(m.id).name }
-        return library.installed.isEmpty ? "No model" : "Choose a model"
+        return library.installed.isEmpty ? "No model" : "No model loaded"
     }
 
     private var subtitle: String {
         if isLoading { return "Loading…" }
         if case .failed = inference.snapshot.model { return "Failed to load" }
         guard let m = current else { return library.installed.isEmpty ? "Download one in Models" : "" }
-        let s = ModelDisplay.subtitle(m, withSize: false)
-        return inference.loadedModel == nil ? (s.isEmpty ? "Not loaded" : "\(s) · not loaded") : s
+        return ModelDisplay.subtitle(m, withSize: false)
     }
 }
 

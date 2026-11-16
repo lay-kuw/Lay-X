@@ -189,6 +189,8 @@ final class AppState: ObservableObject {
     @Published var settingsCategory: SettingsScreen.Category = .general
     @Published var settingsSearch = ""
     @Published var inspector = false
+    /// The Chat / Image model panel is open (clicks anywhere else in the window close it).
+    @Published var modelPanelOpen = false
     @Published var modelsTab: ModelsScreen.Tab = .installed
     /// Models screen shows language (Chat) or image models.
     @Published var modelsKind: ModelKind = .language

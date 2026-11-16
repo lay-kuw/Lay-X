@@ -16,6 +16,7 @@ struct RootView: View {
             HStack(spacing: LX.S.s2) {
                 Sidebar()
                     .frame(width: LX.S.sidebar)
+                    .overlay { panelDismissCatcher }
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .pane(radius: LX.R.xl, tint: LX.C.content)
@@ -23,6 +24,7 @@ struct RootView: View {
                     InspectorPanel()
                         .frame(width: 288)
                         .pane(radius: LX.R.xl)
+                        .overlay { panelDismissCatcher }
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
@@ -33,7 +35,18 @@ struct RootView: View {
         .environment(\.fullGlass, fullGlass && !(followReduce && reduceTransparency))
         .environment(\.glowPreset, LX.Glow(rawValue: glowRaw) ?? .violet)
         .animation(.easeInOut(duration: 0.35), value: glowRaw)
+        .onChange(of: state.screen) { _, _ in state.modelPanelOpen = false }
         .ignoresSafeArea()
+    }
+
+    /// While a model panel is open, a click on the sidebar (or inspector) only closes it, like a click on the
+    /// screen's empty area does.
+    @ViewBuilder private var panelDismissCatcher: some View {
+        if state.modelPanelOpen {
+            Color.black.opacity(0.001)
+                .contentShape(Rectangle())
+                .onTapGesture { withAnimation(LX.M.mini) { state.modelPanelOpen = false } }
+        }
     }
 
     @ViewBuilder private var content: some View {
