@@ -1,4 +1,5 @@
 #if canImport(LayXMLX)
+import Darwin
 import Foundation
 import LayXCore
 import LayXMLX
@@ -17,7 +18,7 @@ nonisolated enum CommandLineTools {
         case "--mlx-selftest":
             print("mlx-selftest: \(MLXSelfTest.run())")
             exit(0)
-        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check":
+        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak":
             Task.detached {
                 do {
                     try await run(args)
@@ -34,7 +35,7 @@ nonisolated enum CommandLineTools {
     }
 
     /// Commands handled headlessly; anything else starts the GUI.
-    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check"]
+    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak"]
 
     private static func run(_ args: [String]) async throws {
         let store = ModelStore(root: try ModelStore.defaultRoot())
@@ -144,6 +145,52 @@ nonisolated enum CommandLineTools {
             print("verify ok: \(APIKeys.verify(secret, in: listed)?.id == record.id)")
             try store.remove(id: record.id)
             print("removed; now \(try store.all().count)")
+        case "--soak":
+            // LayX --soak <model> [generations] — repeated generation + load/unload cycles; reports memory drift.
+            guard args.count >= 3, let id = ModelRepoID(args[2]), let model = store.installedModel(id) else {
+                throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "")
+            }
+            let n = args.count >= 4 ? Int(args[3]) ?? 40 : 40
+            let coordinator = InferenceCoordinator(engine: MLXEngine())
+            func rssMB() -> Double {
+                var info = mach_task_basic_info()
+                var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+                let kr = withUnsafeMutablePointer(to: &info) {
+                    $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count) }
+                }
+                return kr == KERN_SUCCESS ? Double(info.resident_size) / 1_048_576 : -1
+            }
+            try await coordinator.load(model.reference)
+            let request = GenerationRequest(messages: [PromptMessage(role: .user, content: "Write two sentences about the sea.")],
+                                            parameters: GenerationParameters(temperature: 0.7, maxTokens: 64), client: .chat, thinking: false)
+            var samples: [(Int, Double, Double)] = []
+            for i in 1...n {
+                if i % 4 == 0 {
+                    // cancel mid-way every 4th run
+                    let t = Task { for try await _ in coordinator.generate(request) {} }
+                    try await Task.sleep(for: .milliseconds(80)); t.cancel(); _ = await t.result
+                } else {
+                    for try await _ in coordinator.generate(request) {}
+                }
+                if i % 10 == 0 || i == 1 {
+                    let mem = await coordinator.memory()
+                    samples.append((i, rssMB(), Double(mem?.activeBytes ?? 0) / 1_048_576))
+                    print(String(format: "gen %3d: RSS %7.1f MB, MLX active %7.1f MB, cache %6.1f MB", i, rssMB(),
+                                 Double(mem?.activeBytes ?? 0) / 1_048_576, Double(mem?.cacheBytes ?? 0) / 1_048_576))
+                }
+            }
+            for cycle in 1...3 {
+                await coordinator.unload()
+                let after = await coordinator.memory()
+                print(String(format: "unload %d: RSS %7.1f MB, MLX active %7.1f MB, cache %6.1f MB", cycle, rssMB(),
+                             Double(after?.activeBytes ?? 0) / 1_048_576, Double(after?.cacheBytes ?? 0) / 1_048_576))
+                try await Task.sleep(for: .seconds(2))
+                print(String(format: "   +2 s: RSS %7.1f MB", rssMB()))
+                try await coordinator.load(model.reference)
+            }
+            if let first = samples.dropFirst().first, let last = samples.last {
+                print(String(format: "drift gen %d→%d: RSS %+.1f MB, MLX active %+.1f MB", first.0, last.0, last.1 - first.1, last.2 - first.2))
+            }
         case "--search":
             let support = MLXArchitectureSupport()
             for r in try await HubAPI().search(args.count >= 3 ? args[2] : "", limit: 12) {

@@ -41,7 +41,9 @@ public actor MLXEngine: InferenceEngine {
 
     public func load(_ model: ModelReference, progress: @escaping @Sendable (Double) -> Void) async throws -> LoadedModelInfo {
         await drainGeneration()
+        let hadModel = container != nil
         unloadNow()
+        if hadModel { await releaseFreedBuffers() }
 
         let dir = model.directory
         guard FileManager.default.fileExists(atPath: dir.appendingPathComponent("config.json").path) else {
@@ -82,6 +84,18 @@ public actor MLXEngine: InferenceEngine {
     public func unload() async {
         await drainGeneration()
         unloadNow()
+        await releaseFreedBuffers()
+    }
+
+    /// Weight buffers are returned to MLX's cache when the last reference (container, iterator, stream) goes
+    /// away, which can happen just after `unloadNow()`. Clear again once they have been released so the memory
+    /// actually goes back to the system.
+    private func releaseFreedBuffers() async {
+        for _ in 0..<5 {
+            try? await Task.sleep(for: .milliseconds(40))
+            Memory.clearCache()
+            if Memory.cacheMemory == 0 { break }
+        }
     }
 
     private func unloadNow() {

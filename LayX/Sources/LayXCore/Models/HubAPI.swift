@@ -13,7 +13,9 @@ public struct HubAPI: Sendable {
 
     /// Searches MLX conversions. `author` defaults to `mlx-community`, the established source of MLX weights.
     public func search(_ query: String, author: String? = "mlx-community", limit: Int = 40) async throws -> [HubModelSummary] {
-        var c = URLComponents(url: endpoint.appendingPathComponent("api/models"), resolvingAgainstBaseURL: false)!
+        guard var c = URLComponents(url: endpoint.appendingPathComponent("api/models"), resolvingAgainstBaseURL: false) else {
+            throw ModelStoreError.network("invalid endpoint")
+        }
         var items = [
             URLQueryItem(name: "filter", value: "mlx"),
             URLQueryItem(name: "sort", value: "downloads"),
@@ -27,16 +29,18 @@ public struct HubAPI: Sendable {
             items.append(URLQueryItem(name: "expand[]", value: e))
         }
         c.queryItems = items
-        let data = try await get(c.url!)
+        guard let url = c.url else { throw ModelStoreError.network("invalid search query") }
+        let data = try await get(url)
         return try Self.parseSearch(data)
     }
 
     /// Lists every file of `id` at `revision` (recursive).
     public func files(of id: ModelRepoID, revision: String = "main") async throws -> [HubFile] {
         let url = endpoint.appendingPathComponent("api/models/\(id.owner)/\(id.name)/tree/\(revision)")
-        var c = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        guard var c = URLComponents(url: url, resolvingAgainstBaseURL: false) else { throw ModelStoreError.network("invalid endpoint") }
         c.queryItems = [URLQueryItem(name: "recursive", value: "true")]
-        return try Self.parseTree(try await get(c.url!))
+        guard let full = c.url else { throw ModelStoreError.network("invalid endpoint") }
+        return try Self.parseTree(try await get(full))
     }
 
     /// Downloads a small file (e.g. `config.json`) into memory.
