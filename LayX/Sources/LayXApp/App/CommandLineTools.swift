@@ -395,11 +395,21 @@ enum WorkCheck {
                                   prepareModel: { throw InferenceError.noModelLoaded })
         session.propose("In @Sources/Greeter.swift add a second function `farewell(name:)` that returns \"Goodbye, \" + name.")
         while session.phase == .reading || session.phase == .generating { try await Task.sleep(for: .milliseconds(50)) }
+        var continued = 0
+        while session.canContinue, continued < 8 {
+            continued += 1
+            print("truncated → continue #\(continued) (\(session.contextUsed) ctx tokens)")
+            session.continueGeneration()
+            while session.phase == .reading || session.phase == .generating { try await Task.sleep(for: .milliseconds(50)) }
+        }
         print("phase: \(session.phase), turns: \(session.turns.count), error: \(session.error ?? "-"), notice: \(session.notice ?? "-")")
         print("summary: \(session.turns.last?.text.prefix(200) ?? "")")
         print("note: \(session.turns.last?.note ?? "")")
         guard let set = session.changeSet else { print("no change set"); return }
         for c in set.changes { print("change: \(c.status) \(c.path) +\(c.stats.added) -\(c.stats.removed)") }
+        if ProcessInfo.processInfo.environment["LAYX_WORK_SHOW"] == "1" {
+            for c in set.changes { for l in c.diff where l.kind != .context { print("  \(l.kind == .added ? "+" : "-") \(l.text)") } }
+        }
         for r in set.rejected { print("rejected: \(r.path) — \(r.reason)") }
         let before = try String(contentsOf: root.appendingPathComponent("Sources/Greeter.swift"), encoding: .utf8)
         print("unchanged before approval: \(before == original)")

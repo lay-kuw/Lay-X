@@ -200,7 +200,7 @@ struct NavRow: View {
                 Text(screen.title).font(LX.F.body)
                 Spacer()
                 if screen == .api, let api = AppServices.shared.api, api.isRunning {
-                    HStack(spacing: 6) { LiveDot(); Text(":\(api.port)").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan) }
+                    HStack(spacing: 6) { LiveDot(); Text(verbatim: ":\(api.port)").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan) }
                 }
                 if screen == .work { WorkActivityIndicator() }
                 if screen == .chat, !AppServices.shared.chats.generating.isEmpty { BusyIndicator(help: "A reply is being generated") }

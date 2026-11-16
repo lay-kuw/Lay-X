@@ -813,3 +813,25 @@ struct Toast: View {
         .pane(radius: LX.R.xl, tint: LX.C.overlay.opacity(0.6))
     }
 }
+
+/// Small bar + "used/total" token label (Chat and Work composers).
+struct ContextMeter: View {
+    let used: Int
+    let total: Int?
+
+    var body: some View {
+        let fraction = total.map { min(Double(used) / Double(max($0, 1)), 1) } ?? 0
+        HStack(spacing: 7) {
+            Capsule().fill(Color.white.opacity(0.08)).frame(width: 44, height: 3)
+                .overlay(alignment: .leading) {
+                    Capsule().fill(fraction > 0.85 ? LX.C.warn : LX.C.accent).frame(width: max(4, 44 * fraction), height: 3)
+                        .animation(.easeOut(duration: 0.25), value: fraction)
+                }
+            Text(verbatim: "\(Self.compact(used))/\(total.map(Self.compact) ?? "—")").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary)
+        }
+    }
+
+    static func compact(_ n: Int) -> String {
+        n >= 1000 ? String(format: n >= 10_000 ? "%.0fk" : "%.1fk", Double(n) / 1000) : String(n)
+    }
+}

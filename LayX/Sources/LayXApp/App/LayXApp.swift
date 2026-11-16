@@ -33,10 +33,9 @@ struct LayXApplication: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1440, height: 900)
         .commands {
-            // Only the "Lay X" menu is visible (see MenuBarHider); these give it Settings and Mini Chat.
+            // Only the "Lay X" menu is visible (see MenuBarHider); this gives it Settings….
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { state.screen = .settings }.keyboardShortcut(",")
-                Button("Show Mini Chat") { MiniChatController.shared.toggle() }
             }
             CommandGroup(replacing: .newItem) {
                 Button("New Chat") { state.newChat() }.keyboardShortcut("n")
@@ -56,7 +55,6 @@ struct LayXApplication: App {
                 Button(state.chats.session(state.currentChatID)?.isPinned == true ? "Unpin Chat" : "Pin Chat") { state.togglePin() }
                     .keyboardShortcut("p")
                 Button("Toggle Inspector") { withAnimation(LX.M.panel) { state.inspector.toggle() } }.keyboardShortcut("i")
-                Button("Show Mini Chat") { MiniChatController.shared.toggle() }
             }
         }
     }

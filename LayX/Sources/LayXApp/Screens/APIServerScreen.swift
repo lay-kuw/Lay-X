@@ -58,7 +58,7 @@ struct APIServerScreen: View {
             let uptime = api.startedAt.map { Self.duration(Date().timeIntervalSince($0)) } ?? ""
             let model = inference.loadedModel.flatMap { ModelRepoID($0.id) }.map(ModelDisplay.name) ?? "no model loaded"
             return ("Running", "uptime \(uptime) · \(model)")
-        case .starting: return ("Starting", "binding \(api.host):\(api.port)")
+        case .starting: return ("Starting", "binding \(api.host):" + String(api.port))
         case .stopped: return ("Stopped", "not listening")
         case .failed(let message): return ("Not running", message)
         }

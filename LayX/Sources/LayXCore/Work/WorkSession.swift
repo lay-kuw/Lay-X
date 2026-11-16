@@ -94,6 +94,11 @@ public enum WorkPrompt {
     - Do not output a file you are not changing.
     """
 
+    /// Asks the model to resume a reply that hit the output limit.
+    public static let continuation = """
+    Your previous reply was cut off by the output limit. Continue EXACTLY where it stopped, starting with the     very next character. Do not repeat anything already written, do not restart the file block, and do not add     any commentary. Finish the remaining file blocks in the same format.
+    """
+
     /// Default system prompt.
     public static var system: String { system(instructions: nil) }
 
@@ -147,6 +152,11 @@ public final class WorkSession {
     public private(set) var error: String?
     public private(set) var notice: String?
     public var focusPath: String?
+    /// The last proposal stopped at the output limit; `continueGeneration()` picks up where it stopped.
+    public private(set) var canContinue = false
+    /// Estimated prompt + output tokens of the current/last proposal (for the context meter).
+    public private(set) var contextUsed = 0
+    public private(set) var contextLength: Int?
 
     @ObservationIgnored private let coordinator: InferenceCoordinator
     @ObservationIgnored private let prepareModel: @MainActor () async throws -> LoadedModelInfo
@@ -154,6 +164,9 @@ public final class WorkSession {
     @ObservationIgnored private let instructions: @MainActor () -> String?
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var lastRequest = ""
+    @ObservationIgnored private var lastPrompt: [PromptMessage] = []
+    @ObservationIgnored private var lastOutput = ""
+    @ObservationIgnored private var lastSelection: ContextBuilder.Selection?
 
     public init(workspace: Workspace, coordinator: InferenceCoordinator,
                 prepareModel: @escaping @MainActor () async throws -> LoadedModelInfo,
@@ -185,8 +198,29 @@ public final class WorkSession {
         notice = nil
         changeSet = nil
         liveText = ""
+        canContinue = false
         phase = .reading
         task = Task { await self.run(fullRequest) }
+    }
+
+    /// Continues a proposal that stopped at the output limit: the model gets its own partial reply and is asked
+    /// to resume exactly where it stopped; the pieces are joined (overlap removed) and parsed as one reply.
+    public func continueGeneration() {
+        guard canContinue, phase != .generating, phase != .reading, phase != .applying,
+              let selection = lastSelection, !lastPrompt.isEmpty else { return }
+        canContinue = false
+        error = nil
+        notice = nil
+        if turns.last?.role == .assistant { turns.removeLast() }
+        // Resume at a line boundary: a cut in the middle of a line makes models re-emit a few characters around
+        // the seam ("name::"), while a whole next line continues cleanly.
+        let previous = Self.lineAligned(lastOutput)
+        let messages = lastPrompt + [
+            PromptMessage(role: .assistant, content: previous),
+            PromptMessage(role: .user, content: WorkPrompt.continuation),
+        ]
+        phase = .generating
+        task = Task { await self.generate(messages: messages, selection: selection, prefix: previous) }
     }
 
     public func cancel() {
@@ -207,12 +241,24 @@ public final class WorkSession {
         let budget = max(1024, min(context * 6 / 10, 24_000) - 1024)
         let selection = ContextBuilder.select(request: request, entries: entries, focus: focusPath, in: workspace, tokenBudget: budget)
         contextFiles = Set(selection.files.map(\.path))
+        contextLength = model.contextLength
         let prompt = [PromptMessage(role: .system, content: WorkPrompt.system(instructions: instructions())),
                       PromptMessage(role: .user, content: WorkPrompt.user(request: request, selection: selection, workspaceName: workspace.name))]
-        let maxOut = max(1024, min(context - selection.estimatedTokens - 512, 8192))
+        lastPrompt = prompt
+        lastSelection = selection
+        phase = .generating
+        await generate(messages: prompt, selection: selection, prefix: "")
+    }
+
+    private func generate(messages prompt: [PromptMessage], selection: ContextBuilder.Selection, prefix: String) async {
+        let context = contextLength ?? 8192
+        let promptTokens = prompt.reduce(0) { $0 + PromptBuilder.estimateTokens($1.content) + 8 }
+        var maxOut = max(1024, min(context - promptTokens - 512, 16_384))
+        // Test hook (CLI checks only): force a small output limit to exercise "Continue generating".
+        if let forced = ProcessInfo.processInfo.environment["LAYX_WORK_MAX_TOKENS"].flatMap(Int.init) { maxOut = forced }
         let genRequest = GenerationRequest(messages: prompt, parameters: GenerationParameters(temperature: 0.2, topP: 0.95, maxTokens: maxOut),
                                            client: .work, thinking: false)
-        phase = .generating
+        contextUsed = promptTokens
         var output = ""
         var metrics: GenerationMetrics?
         let clock = ContinuousClock()
@@ -222,7 +268,11 @@ public final class WorkSession {
                 switch event {
                 case .text(let t):
                     output += t
-                    if clock.now - lastFlush >= .milliseconds(50) { liveText = output; lastFlush = clock.now }
+                    if clock.now - lastFlush >= .milliseconds(50) {
+                        liveText = Self.joinContinuation(prefix, output)
+                        contextUsed = promptTokens + PromptBuilder.estimateTokens(output)
+                        lastFlush = clock.now
+                    }
                 case .finished(let m): metrics = m
                 }
             }
@@ -230,6 +280,7 @@ public final class WorkSession {
         } catch {
             liveText = ""
             phase = .idle
+            if !prefix.isEmpty { canContinue = true }   // the earlier partial reply is still there to continue
             if error is CancellationError || Task.isCancelled {
                 notice = "Stopped. Nothing was changed."
             } else {
@@ -238,15 +289,21 @@ public final class WorkSession {
             return
         }
         liveText = ""
+        output = Self.joinContinuation(prefix, output)
+        lastOutput = output
+        contextUsed = promptTokens + PromptBuilder.estimateTokens(output)
+        let truncated = metrics?.stopReason == .maxTokens || metrics?.stopReason == .contextLimit
+        canContinue = truncated && metrics?.stopReason == .maxTokens
         let parsed = ProposalParser.parse(output, knownPaths: Set(selection.files.map(\.path)))
         let set = ChangeSetBuilder.build(summary: parsed.summary, blocks: parsed.blocks, in: workspace)
         var note = "read \(selection.files.count) file\(selection.files.count == 1 ? "" : "s") · \(Self.compact(selection.estimatedTokens)) ctx"
         if let tps = metrics?.decodeTokensPerSecond { note += String(format: " · %.1f tok/s", tps) }
-        if metrics?.stopReason == .maxTokens || metrics?.stopReason == .contextLimit { note += " · output truncated" }
+        if truncated { note += metrics?.stopReason == .contextLimit ? " · stopped: context full" : " · output truncated" }
         turns.append(Turn(role: .assistant, text: parsed.summary.isEmpty ? "(no explanation)" : parsed.summary, note: note))
         if set.changes.isEmpty {
             changeSet = nil
             phase = .idle
+            if canContinue { return }
             notice = set.rejected.isEmpty ? "No file changes were proposed. Small models often reply without edits — a 4B+ model follows the edit format more reliably." :
                 "No usable changes: " + set.rejected.map { "\($0.path) (\($0.reason))" }.joined(separator: "; ")
         } else {
@@ -262,6 +319,10 @@ public final class WorkSession {
         task?.cancel()
         turns = []
         lastRequest = ""
+        lastPrompt = []
+        lastOutput = ""
+        canContinue = false
+        contextUsed = 0
         liveText = ""
         error = nil
         notice = nil
@@ -276,6 +337,7 @@ public final class WorkSession {
     /// Discards the proposal. Nothing on disk changes.
     public func reject() {
         changeSet = nil
+        canContinue = false
         phase = .idle
         notice = "Proposal rejected — nothing was changed."
     }
@@ -289,6 +351,7 @@ public final class WorkSession {
         do {
             let applied = try ChangeApplier.apply(selected, in: workspace)
             changeSet = nil
+            canContinue = false
             phase = .idle
             notice = "Applied \(applied.count) change\(applied.count == 1 ? "" : "s")."
             rescan()
@@ -296,6 +359,39 @@ public final class WorkSession {
             phase = .proposed
             self.error = (error as? LocalizedError)?.errorDescription ?? "The changes couldn’t be applied."
         }
+    }
+
+    /// Joins a continuation onto a partial reply. If the model restarted the unfinished file block, the partial
+    /// block is replaced; if it repeated the tail of the partial reply, the overlap is dropped.
+    public static func joinContinuation(_ previous: String, _ next: String) -> String {
+        guard !previous.isEmpty else { return next }
+        var next = next
+        // A reply resumed at a line boundary may begin by repeating the last complete line.
+        if previous.hasSuffix("\n"), let lastLine = previous.dropLast().split(separator: "\n", omittingEmptySubsequences: false).last,
+           !lastLine.trimmingCharacters(in: .whitespaces).isEmpty, next.hasPrefix(lastLine + "\n") {
+            next.removeFirst(lastLine.count + 1)
+        }
+        let lead = next.drop { $0.isWhitespace }
+        if lead.hasPrefix("<<<FILE"), let open = previous.range(of: "<<<FILE", options: .backwards),
+           !previous[open.upperBound...].contains("FILE>>>") {
+            func path<S: StringProtocol>(_ s: S) -> String {
+                s.dropFirst("<<<FILE".count).prefix { !$0.isNewline }.trimmingCharacters(in: .whitespaces)
+            }
+            if path(previous[open.lowerBound...]) == path(lead) { return String(previous[..<open.lowerBound]) + lead }
+        }
+        let maxOverlap = min(previous.count, next.count, 800)
+        if maxOverlap >= 16 {
+            for k in stride(from: maxOverlap, through: 16, by: -1) where previous.hasSuffix(next.prefix(k)) {
+                return previous + next.dropFirst(k)
+            }
+        }
+        return previous + next
+    }
+
+    /// The text up to and including its last newline (the whole text if it has none).
+    public static func lineAligned(_ text: String) -> String {
+        guard let nl = text.lastIndex(of: "\n") else { return text }
+        return String(text[...nl])
     }
 
     static func compact(_ n: Int) -> String { n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)" }

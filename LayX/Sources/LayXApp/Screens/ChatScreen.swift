@@ -124,14 +124,18 @@ struct ModelPicker: View {
                     if isLoading {
                         ProgressView().controlSize(.mini)
                     } else {
-                        Image(systemName: "cpu").font(.system(size: 12)).foregroundStyle(LX.C.accentText)
+                        Image(systemName: "cpu").font(.system(size: 12)).foregroundStyle(LX.C.primary)
                     }
                 }
                 .frame(width: 14, height: 14)
-                Text(title).font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
-                if !subtitle.isEmpty {
-                    Text(subtitle).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Text(title).font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary)
+                    if !subtitle.isEmpty {
+                        Text(subtitle).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
+                    }
                 }
+                .lineLimit(1)
+                .fixedSize()
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(LX.C.tertiary)
                     .rotationEffect(.degrees(open ? 180 : 0))
             }
@@ -659,20 +663,8 @@ struct Composer: View {
     private var contextMeter: some View {
         let messages = chats.session(state.currentChatID)?.messages ?? []
         let used = messages.reduce(PromptBuilder.estimateTokens(state.draft)) { $0 + PromptBuilder.estimateTokens($1.content) }
-        let ctx = inference.loadedModel?.contextLength
-        let fraction = ctx.map { min(Double(used) / Double($0), 1) } ?? 0
-        return HStack(spacing: 7) {
-            Capsule().fill(Color.white.opacity(0.08)).frame(width: 44, height: 3)
-                .overlay(alignment: .leading) {
-                    Capsule().fill(fraction > 0.85 ? LX.C.warn : LX.C.accent).frame(width: max(4, 44 * fraction), height: 3)
-                }
-            Text("\(Self.compact(used))/\(ctx.map(Self.compact) ?? "—")").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary)
-        }
-        .help("Estimated tokens in this chat / model context window")
-    }
-
-    static func compact(_ n: Int) -> String {
-        n >= 1000 ? String(format: n >= 10_000 ? "%.0fk" : "%.1fk", Double(n) / 1000) : "\(n)"
+        return ContextMeter(used: used, total: inference.loadedModel?.contextLength)
+            .help("Estimated tokens in this chat / model context window")
     }
 
     private func submit() {

@@ -185,6 +185,7 @@ struct WorkProjectView: View {
                 Image(systemName: activity.symbol)
                     .font(.system(size: 9, weight: .semibold)).foregroundStyle(LX.C.liveCyan)
                     .symbolEffect(.pulse, options: .repeating)
+                    .frame(width: 14, alignment: .center)   // eye and pencil share one column
                     .help(activity.help)
             }
             if let status {
@@ -229,6 +230,12 @@ struct WorkProjectView: View {
 
     // MARK: Diff / preview
 
+    /// The file block the model is writing (or wrote last) in the live output.
+    private var liveBlock: LiveCodeView.Block? {
+        guard session.phase == .generating else { return nil }
+        return LiveCodeView.Block.last(in: session.liveText)
+    }
+
     private func loadPreview() {
         guard let path = session.focusPath, focusedChange == nil else { preview = nil; return }
         preview = try? TextFile.read(path, in: session.workspace)
@@ -237,9 +244,17 @@ struct WorkProjectView: View {
     private var centerPane: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
+                if let live = liveBlock {
+                    Image(systemName: "pencil").font(.system(size: 12)).foregroundStyle(LX.C.liveCyan)
+                        .symbolEffect(.pulse, options: .repeating, isActive: !live.closed)
+                    Text(live.path).font(LX.F.ui(12.5, .medium)).lineLimit(1).truncationMode(.middle)
+                    LiveStatusText(text: live.closed ? "written" : "writing · \(live.lineCount) lines")
+                } else {
                 Image(systemName: "doc").font(.system(size: 12)).foregroundStyle(LX.C.secondary)
                 Text(session.focusPath ?? "No file selected").font(LX.F.ui(12.5, .medium)).lineLimit(1).truncationMode(.middle)
-                if let c = focusedChange {
+                }
+                if liveBlock != nil {
+                } else if let c = focusedChange {
                     Text("\(Text("+\(c.stats.added) ").foregroundStyle(LX.C.ok))\(Text("−\(c.stats.removed)").foregroundStyle(LX.C.error))")
                         .font(LX.F.mono(11))
                 } else if preview != nil {
@@ -253,6 +268,10 @@ struct WorkProjectView: View {
             .padding(.horizontal, 14).frame(height: 40)
             Rectangle().fill(LX.C.divider).frame(height: 1)
 
+            if let live = liveBlock {
+                LiveCodeView(block: live)
+                    .transition(.opacity)
+            } else {
             GeometryReader { geo in
             ScrollView([.vertical, .horizontal]) {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -277,6 +296,7 @@ struct WorkProjectView: View {
                 .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .topLeading)
             }
             .defaultScrollAnchor(.topLeading)
+            }
             }
 
             if !changes.isEmpty {
@@ -362,6 +382,15 @@ struct WorkProjectView: View {
                             BlinkingCaret()
                         }
                     }
+                    if session.canContinue && !busy {
+                        HStack(spacing: 8) {
+                            LXButton(title: "Continue generating", symbol: "arrow.forward", kind: .secondary) {
+                                session.continueGeneration()
+                            }
+                            Text("stopped at the output limit").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary)
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
                     if let error = session.error {
                         Text(error).font(LX.F.caption).foregroundStyle(LX.C.error).fixedSize(horizontal: false, vertical: true)
                     }
@@ -433,8 +462,11 @@ struct WorkProjectView: View {
                     .onChange(of: request) { mentionIndex = 0 }
                     .onSubmit { submit() }
                     .padding(.horizontal, 12).padding(.top, 11).padding(.bottom, 7)
-                HStack(spacing: 6) {
-                    Text("@ adds files or folders").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary)
+                HStack(spacing: 10) {
+                    ContextMeter(used: session.contextUsed > 0 ? session.contextUsed : PromptBuilder.estimateTokens(request),
+                                 total: session.contextLength ?? inference.loadedModel?.contextLength)
+                        .help("Estimated tokens of the last proposal (files + request + output) / model context window")
+                    Text("@ adds files").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary)
                     Spacer()
                     if busy {
                         SendButton(mode: .stop) { session.cancel() }.keyboardShortcut(.escape, modifiers: [])
@@ -644,6 +676,83 @@ struct WorkModelBadge: View {
             .lineLimit(1)
             .padding(.leading, 6)
             .help("Model used by Work")
+        }
+    }
+}
+
+/// Code streaming in from the model: new lines rise and fade in, the line being written glows, and the view
+/// follows the end of the file.
+struct LiveCodeView: View {
+    struct Block: Equatable {
+        var path: String
+        var lines: [String]
+        var closed: Bool
+        var lineCount: Int { lines.count }
+
+        /// Last `<<<FILE path` block in streaming output (possibly unterminated).
+        static func last(in text: String) -> Block? {
+            guard let open = text.range(of: "<<<FILE", options: .backwards) else { return nil }
+            let rest = text[open.upperBound...]
+            let path = rest.prefix { !$0.isNewline }.trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "`\"'"))
+            guard !path.isEmpty else { return nil }
+            var body = rest.drop { !$0.isNewline }.dropFirst()
+            var closed = false
+            if let end = body.range(of: "FILE>>>") { body = body[..<end.lowerBound]; closed = true }
+            var lines = body.components(separatedBy: "\n")
+            if lines.first?.trimmingCharacters(in: .whitespaces).hasPrefix("```") == true { lines.removeFirst() }
+            if closed {
+                while let l = lines.last, l.trimmingCharacters(in: .whitespaces).isEmpty || l.trimmingCharacters(in: .whitespaces) == "```" {
+                    lines.removeLast()
+                }
+            }
+            return Block(path: path, lines: lines, closed: closed)
+        }
+    }
+
+    let block: Block
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView([.vertical]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(block.lines.enumerated()), id: \.offset) { i, line in
+                        row(i, line, current: i == block.lines.count - 1 && !block.closed)
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .offset(y: 8)).combined(with: .scale(scale: 0.98, anchor: .leading)),
+                                removal: .identity))
+                    }
+                    Color.clear.frame(height: 1).id("end")
+                }
+                .padding(.vertical, 10)
+                .animation(.spring(duration: 0.35, bounce: 0.15), value: block.lines.count)
+            }
+            .onChange(of: block.lines.count) {
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("end", anchor: .bottom) }
+            }
+            .onAppear { proxy.scrollTo("end", anchor: .bottom) }
+        }
+    }
+
+    private func row(_ i: Int, _ text: String, current: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text(verbatim: String(i + 1)).font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary)
+                .frame(width: 44, alignment: .trailing).padding(.trailing, 14)
+            Text(verbatim: text.isEmpty ? " " : text).font(LX.F.mono(12))
+                .foregroundStyle(current ? Color.white : LX.C.body)
+                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+            if current { BlinkingCaret().padding(.leading, 2) }
+            Spacer(minLength: 0)
+        }
+        .frame(height: 20)
+        .background(alignment: .leading) {
+            if current {
+                LinearGradient(colors: [LX.C.liveCyan.opacity(0.14), LX.C.accent.opacity(0.06), .clear],
+                               startPoint: .leading, endPoint: .trailing)
+            }
+        }
+        .overlay(alignment: .leading) {
+            Rectangle().fill(LX.C.ok.opacity(current ? 0.9 : 0.35)).frame(width: 2)
         }
     }
 }
