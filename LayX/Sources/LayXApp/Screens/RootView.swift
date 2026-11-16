@@ -203,6 +203,7 @@ struct NavRow: View {
                     HStack(spacing: 6) { LiveDot(); Text(":\(api.port)").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan) }
                 }
                 if screen == .work { WorkActivityIndicator() }
+                if screen == .chat, !AppServices.shared.chats.generating.isEmpty { BusyIndicator(help: "A reply is being generated") }
             }
             .foregroundStyle(selected ? Color.white : Color(hex: 0xC9CBD6))
             .padding(.horizontal, 8)
@@ -251,10 +252,7 @@ struct WorkActivityIndicator: View {
     var body: some View {
         let sessions = AppServices.shared.work.sessions.values
         if sessions.contains(where: { $0.phase == .reading || $0.phase == .generating || $0.phase == .applying }) {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 11, weight: .bold)).foregroundStyle(LX.C.liveCyan)
-                .symbolEffect(.variableColor.iterative, options: .repeating)
-                .help("Work is preparing a proposal")
+            BusyIndicator(help: "Work is preparing a proposal")
         } else if sessions.contains(where: { $0.changeSet != nil }) {
             Image(systemName: "checkmark.circle")
                 .font(.system(size: 11, weight: .semibold)).foregroundStyle(LX.C.warn)

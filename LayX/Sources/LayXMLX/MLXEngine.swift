@@ -171,13 +171,18 @@ public actor MLXEngine: InferenceEngine {
         if let bits = settings.kvBits { parameters.kvBits = bits }
         if let rp = request.parameters.repetitionPenalty { parameters.repetitionPenalty = Float(rp) }
         let generateParameters = parameters
+        let engineSettings = settings
 
         let pair: (AsyncStream<Generation>, Task<Void, Never>, Bool)
         do {
             pair = try await container.perform(nonSendable: lmInput) { context, input in
+                var components = GenerationComponents()
+                if engineSettings.gpuLimit < 0.999 {
+                    components.logitProcessorFactory = { GPUDutyCycle(settings: engineSettings) }
+                }
                 let iterator = try TokenIterator(
                     input: input, model: context.model, cache: nil, state: nil, parameters: generateParameters,
-                    components: .init())
+                    components: components)
                 // Templates such as Qwen3.5/3.6 end the prompt with "<think>\n" when thinking is on, so the
                 // model's output starts inside the reasoning block without an opening tag.
                 let ids = input.text.tokens.asArray(Int.self)
@@ -281,4 +286,52 @@ private struct GenerationHandle: Sendable {
     let task: Task<Void, Never>
     let opensThinking: Bool
     var triple: (AsyncStream<Generation>, Task<Void, Never>, Bool) { (stream, task, opensThinking) }
+}
+
+/// Caps the GPU duty cycle during decoding with a feedback loop:
+/// - the unthrottled token time G is the median of unpaused intervals (tokens 3–8, re-measured for 4 tokens
+///   every 64 as the context grows; the first two include warm-up),
+/// - the target interval is G / gpuLimit (GPU busy ≈ gpuLimit of the time),
+/// - the pause is corrected every token from the *measured* interval, which absorbs sleep overshoot (macOS timer
+///   coalescing) and MLX's look-ahead scheduling.
+/// Runs on the generation loop's thread; logits are untouched.
+struct GPUDutyCycle: LogitProcessor {
+    let settings: EngineSettings
+    private var last: ContinuousClock.Instant?
+    private var count = 0
+    private var window: [Double] = []
+    private var tokenTime: Double = 0
+    private var pause: Double = 0
+
+    init(settings: EngineSettings) { self.settings = settings }
+
+    mutating func prompt(_ prompt: MLXArray) { last = nil; count = 0; window = []; tokenTime = 0; pause = 0 }
+
+    func process(logits: MLXArray) -> MLXArray { logits }
+
+    private func measuring(_ n: Int) -> Bool { (3...8).contains(n) || (n > 8 && n % 64 < 4) }
+
+    mutating func didSample(token: MLXArray) {
+        let now = ContinuousClock.now
+        count += 1
+        if let last {
+            let interval = (now - last).seconds
+            if measuring(count) {
+                window.append(interval)
+                if window.count >= 4 {
+                    tokenTime = window.sorted()[window.count / 2]
+                    if !measuring(count + 1) { window = [] }
+                }
+            } else if tokenTime > 0 {
+                // Feedback: nudge the pause so the full interval converges on the target.
+                let target = tokenTime / settings.gpuLimit
+                pause = min(max(pause + 0.5 * (target - interval), 0), 0.25)
+            }
+        }
+        if !measuring(count + 1), tokenTime > 0 {
+            if pause == 0 { pause = settings.pause(forTokenTime: tokenTime) - tokenTime }  // initial guess
+            if pause > 0 { Thread.sleep(forTimeInterval: pause) }
+        }
+        last = now
+    }
 }

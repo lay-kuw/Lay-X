@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Security
 import Synchronization
+import LayXCore
 
 /// Metadata about an API key. The secret itself is shown once at creation and never stored — only its SHA-256.
 public struct APIKeyRecord: Codable, Sendable, Hashable, Identifiable {
@@ -131,4 +132,42 @@ public final class InMemoryAPIKeyStore: APIKeyStoring {
     public func all() throws -> [APIKeyRecord] { records.withLock { $0 } }
     public func add(_ record: APIKeyRecord) throws { records.withLock { $0.append(record) } }
     public func remove(id: String) throws { records.withLock { $0.removeAll { $0.id == id } } }
+}
+
+/// API key hashes in the app database, with an in-memory cache so request authentication never waits on disk.
+/// Stores only SHA-256 hashes of random keys (not secrets), so it needs no Keychain access — which also
+/// avoids macOS asking for Keychain permission at every launch of a rebuilt (differently signed) app.
+public final class DatabaseAPIKeyStore: APIKeyStoring {
+    private let cache = Mutex<[APIKeyRecord]>([])
+    private let db: SQLiteDatabase
+
+    public init(database: SQLiteDatabase) async {
+        db = database
+        let rows = (try? await database.query("SELECT * FROM api_key ORDER BY created_at")) ?? []
+        let records = rows.compactMap { r -> APIKeyRecord? in
+            guard let id = r["id"].text, let name = r["name"].text, let prefix = r["prefix"].text, let hash = r["hash"].text
+            else { return nil }
+            return APIKeyRecord(id: id, name: name, prefix: prefix, hash: hash,
+                                createdAt: Date(timeIntervalSince1970: r["created_at"].double ?? 0))
+        }
+        cache.withLock { $0 = records }
+    }
+
+    public func all() throws -> [APIKeyRecord] { cache.withLock { $0 } }
+
+    public func add(_ record: APIKeyRecord) throws {
+        cache.withLock { $0.append(record) }
+        let db = self.db
+        Task {
+            try? await db.execute("INSERT OR REPLACE INTO api_key (id, name, prefix, hash, created_at) VALUES (?, ?, ?, ?, ?)",
+                                  [.text(record.id), .text(record.name), .text(record.prefix), .text(record.hash),
+                                   .double(record.createdAt.timeIntervalSince1970)])
+        }
+    }
+
+    public func remove(id: String) throws {
+        cache.withLock { $0.removeAll { $0.id == id } }
+        let db = self.db
+        Task { try? await db.execute("DELETE FROM api_key WHERE id = ?", [.text(id)]) }
+    }
 }

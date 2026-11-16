@@ -291,6 +291,42 @@ struct GlowingBorder: View {
     }
 }
 
+/// Status line for work in progress ("Thinking…", "Searching the web…"): the same cyan→violet light as the
+/// composer outline sweeps through the text. Static when Reduce Motion is on.
+struct LiveStatusText: View {
+    let text: String
+    var font: Font = LX.F.mono(10.5)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(paused: reduceMotion)) { ctx in
+            let phase = (ctx.date.timeIntervalSinceReferenceDate / 1.6).truncatingRemainder(dividingBy: 1)
+            Text(text)
+                .font(font)
+                .foregroundStyle(LinearGradient(
+                    stops: [
+                        .init(color: LX.C.liveCyan, location: 0),
+                        .init(color: Color(hex: 0x9D8CFF), location: 0.5),
+                        .init(color: LX.C.liveCyan, location: 1),
+                    ],
+                    startPoint: UnitPoint(x: -1 + phase * 2, y: 0.5), endPoint: UnitPoint(x: phase * 2, y: 0.5)))
+        }
+        .lineLimit(1)
+        .accessibilityLabel(text)
+    }
+}
+
+/// Small animated "busy" glyph for sidebar rows.
+struct BusyIndicator: View {
+    var help: String
+    var body: some View {
+        Image(systemName: "ellipsis")
+            .font(.system(size: 11, weight: .bold)).foregroundStyle(LX.C.liveCyan)
+            .symbolEffect(.variableColor.iterative, options: .repeating)
+            .help(help)
+    }
+}
+
 struct BlinkingCaret: View {
     @State private var on = true
     var body: some View {

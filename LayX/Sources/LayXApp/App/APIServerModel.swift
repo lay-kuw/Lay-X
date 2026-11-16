@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import LayXCore
 import LayXServer
+import Synchronization
 
 /// MainActor state for the API Server screen and Settings → API Server.
 /// Persisted (UserDefaults): enabled, port, require-key-on-localhost, allow-model-switching.
@@ -33,14 +34,14 @@ final class APIServerModel {
     }
 
     @ObservationIgnored private var controller: APIServerController!
-    @ObservationIgnored private let keyStore: any APIKeyStoring
+    @ObservationIgnored private let keyStore = ForwardingKeyStore()
+    static let keysMigratedKey = "lx.api.keysMigratedFromKeychain"
 
     init(coordinator: InferenceCoordinator, models: ModelLibrary) {
         let d = UserDefaults.standard
         port = d.object(forKey: Keys.port) as? Int ?? 1234
         requireKeyOnLocalhost = d.object(forKey: Keys.requireKey) as? Bool ?? false
         allowModelSwitching = d.object(forKey: Keys.allowSwitch) as? Bool ?? true
-        keyStore = KeychainAPIKeyStore()
         let deps = APIServerDependencies(
             coordinator: coordinator,
             installedModels: { await MainActor.run { models.installed.map(\.id.description) } },
@@ -53,7 +54,6 @@ final class APIServerModel {
             keys: keyStore,
             log: { [weak self] record in Task { @MainActor in self?.append(record) } })
         controller = APIServerController(deps: deps)
-        reloadKeys()
         let controller = self.controller!
         Task { [weak self] in
             for await s in await controller.updates() {
@@ -63,7 +63,32 @@ final class APIServerModel {
                 self.status = s
             }
         }
-        if d.bool(forKey: Keys.enabled) { start() }
+        Task {
+            await useDatabase(AppServices.shared.database)
+            if d.bool(forKey: Keys.enabled) { start() }
+        }
+    }
+
+    /// Points key storage at the app database (hashes only — no Keychain, so no permission prompts). Called at
+    /// launch and when the database moves. Keys created by earlier versions in the Keychain are migrated once.
+    func useDatabase(_ db: SQLiteDatabase?) async {
+        guard let db else {
+            keyStore.target.withLock { $0 = InMemoryAPIKeyStore() }
+            keyError = "API keys can’t be saved: the local database isn’t available."
+            reloadKeys()
+            return
+        }
+        let store = await DatabaseAPIKeyStore(database: db)
+        keyStore.target.withLock { $0 = store }
+        if !UserDefaults.standard.bool(forKey: Self.keysMigratedKey) {
+            let legacy = KeychainAPIKeyStore()
+            if let old = try? legacy.all() {
+                for r in old where !((try? store.all()) ?? []).contains(where: { $0.id == r.id }) { try? store.add(r) }
+                for r in old { try? legacy.remove(id: r.id) }
+            }
+            UserDefaults.standard.set(true, forKey: Self.keysMigratedKey)
+        }
+        reloadKeys()
     }
 
     var isRunning: Bool { if case .running = status { true } else { false } }
@@ -121,7 +146,7 @@ final class APIServerModel {
             reloadKeys()
             return true
         } catch {
-            keyError = (error as? LocalizedError)?.errorDescription ?? "The key couldn’t be saved to the Keychain."
+            keyError = (error as? LocalizedError)?.errorDescription ?? "The key couldn’t be saved."
             return false
         }
     }
@@ -202,4 +227,12 @@ final class APIServerModel {
         }
         return nil
     }
+}
+
+/// Key store whose backing store can be swapped (database moved) while the server keeps a stable reference.
+final class ForwardingKeyStore: APIKeyStoring {
+    let target = Mutex<any APIKeyStoring>(InMemoryAPIKeyStore())
+    func all() throws -> [APIKeyRecord] { try target.withLock { try $0.all() } }
+    func add(_ record: APIKeyRecord) throws { try target.withLock { try $0.add(record) } }
+    func remove(id: String) throws { try target.withLock { try $0.remove(id: id) } }
 }

@@ -64,6 +64,10 @@ nonisolated enum CommandLineTools {
             guard let model = store.installedModel(id) else { throw ModelStoreError.notInstalled(id.description) }
             let maxTokens = args.count >= 5 ? Int(args[4]) ?? 256 : 256
             let coordinator = InferenceCoordinator(engine: MLXEngine())
+            if let raw = ProcessInfo.processInfo.environment["LAYX_GPU_LIMIT"], let limit = Double(raw) {
+                await coordinator.configure(EngineSettings(gpuLimit: limit))
+                print("gpu limit \(limit)")
+            }
             let info = try await coordinator.load(model.reference)
             print("loaded \(info.id) in \(String(format: "%.2f", info.loadDuration.seconds))s, context \(info.contextLength.map(String.init) ?? "?")")
             let request = GenerationRequest(

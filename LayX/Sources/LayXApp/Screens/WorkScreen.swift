@@ -95,6 +95,8 @@ struct WorkProjectView: View {
                     }
                     Image(systemName: "lock.shield")
                         .font(.system(size: 13)).foregroundStyle(changes.isEmpty ? LX.C.tertiary : LX.C.warn)
+                        .frame(width: 28)               // same column as the Clear (trash) button below
+                        .padding(.trailing, -2)
                         .help("Read-only until approved — nothing in this folder changes until you press Apply")
                         .accessibilityLabel("Read-only until approved")
                 }
@@ -279,6 +281,25 @@ struct WorkProjectView: View {
 
     private var busy: Bool { session.phase == .reading || session.phase == .generating }
 
+    /// What Work is doing right now (for the live status line).
+    private var workStatus: String {
+        switch session.phase {
+        case .reading: return "Reading project files…"
+        case .applying: return "Applying changes…"
+        case .generating:
+            let text = session.liveText
+            if let r = text.range(of: "<<<FILE ", options: .backwards) {
+                let path = text[r.upperBound...].prefix { !$0.isNewline }
+                let done = text[r.upperBound...].contains("FILE>>>")
+                if !done, !path.isEmpty { return "Writing \((String(path) as NSString).lastPathComponent)…" }
+            }
+            let files = text.components(separatedBy: "FILE>>>").count - 1
+            if ThinkingParser.split(text).isThinking { return "Thinking…" }
+            return files > 0 ? "Proposed \(files) file\(files == 1 ? "" : "s") · continuing…" : "Planning the change…"
+        default: return ""
+        }
+    }
+
     private var assistant: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
@@ -304,8 +325,7 @@ struct WorkProjectView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 6) {
                                 Text(modelName).font(LX.F.ui(11.5, .semibold)).foregroundStyle(LX.C.accentText)
-                                Text(session.phase == .reading ? "reading files…" : "writing proposal…")
-                                    .font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan)
+                                LiveStatusText(text: workStatus)
                             }
                             let live = ProposalParser.parse(session.liveText).summary
                             if !live.isEmpty {

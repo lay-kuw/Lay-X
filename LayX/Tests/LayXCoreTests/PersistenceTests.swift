@@ -5,10 +5,10 @@ import Testing
 @Suite struct SQLiteDatabaseTests {
     @Test func migrationsSetUserVersionAndCreateTables() async throws {
         let db = try SQLiteDatabase(location: .inMemory, migrations: LayXSchema.migrations)
-        #expect(try await db.userVersion() == 2)
+        #expect(try await db.userVersion() == 3)
         let tables = try await db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
             .compactMap { $0["name"].text }
-        #expect(tables == ["app_meta", "benchmark_run", "pinned_chat", "pinned_message"])
+        #expect(tables == ["api_key", "app_meta", "benchmark_run", "pinned_chat", "pinned_message"])
     }
 
     @Test func migrationsAreNotReappliedOnReopen() async throws {

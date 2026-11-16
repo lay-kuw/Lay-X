@@ -16,11 +16,17 @@ enum WebPreferences {
         WebSearchMode(rawValue: UserDefaults.standard.string(forKey: modeKey) ?? "") ?? .off
     }
 
+    static var provider: WebSearchProvider {
+        WebSearchProvider(rawValue: UserDefaults.standard.string(forKey: providerKey) ?? "") ?? .duckDuckGo
+    }
+
+    /// Full configuration for a search. The Brave key is only read (from the Keychain, cached for the session)
+    /// when Brave is the selected provider — never just to draw the UI.
     static var config: WebSearchConfig {
         let d = UserDefaults.standard
         return WebSearchConfig(
-            provider: WebSearchProvider(rawValue: d.string(forKey: providerKey) ?? "") ?? .duckDuckGo,
-            braveKey: BraveKey.read(),
+            provider: provider,
+            braveKey: provider == .brave ? BraveKey.cachedRead() : nil,
             searxngURL: d.string(forKey: searxngURLKey).flatMap { URL(string: $0) }.flatMap { ["http", "https"].contains($0.scheme ?? "") ? $0 : nil },
             maxResults: d.object(forKey: maxResultsKey) as? Int ?? 5,
             pagesToRead: d.object(forKey: pagesKey) as? Int ?? 3)
@@ -30,6 +36,16 @@ enum WebPreferences {
     enum BraveKey {
         static let service = "app.layx.web-search"
         static let account = "brave"
+
+        @MainActor private static var cache: String??
+
+        /// Keychain read once per session (avoids repeated permission prompts for ad-hoc–signed builds).
+        @MainActor static func cachedRead() -> String? {
+            if let cached = cache { return cached }
+            let value = read()
+            cache = .some(value)
+            return value
+        }
 
         static func read() -> String? {
             let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
@@ -41,8 +57,9 @@ enum WebPreferences {
         }
 
         @discardableResult
-        static func save(_ key: String) -> Bool {
+        @MainActor static func save(_ key: String) -> Bool {
             remove()
+            cache = .some(key)
             let a: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                     kSecAttrAccount as String: account, kSecAttrLabel as String: "Lay X — Brave Search API key",
                                     kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
@@ -50,7 +67,8 @@ enum WebPreferences {
             return SecItemAdd(a as CFDictionary, nil) == errSecSuccess
         }
 
-        static func remove() {
+        @MainActor static func remove() {
+            cache = .some(nil)
             let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                     kSecAttrAccount as String: account]
             SecItemDelete(q as CFDictionary)

@@ -289,7 +289,7 @@ struct WebSearchSettings: View {
     @AppStorage(WebPreferences.maxResultsKey) private var maxResults = 5
     @AppStorage(WebPreferences.pagesKey) private var pages = 3
     @State private var braveKey = ""
-    @State private var hasBraveKey = WebPreferences.BraveKey.read() != nil
+    @State private var hasBraveKey = false
     @State private var testResult: String?
     @State private var testing = false
 
@@ -335,6 +335,7 @@ struct WebSearchSettings: View {
                     Segmented(options: [(0, "0"), (2, "2"), (3, "3"), (5, "5")], selection: $pages, mono: true)
                 }
                 screen.row("Test", testResult ?? "Runs a sample search with the current settings") {
+                    EmptyView().onAppear { if provider == WebSearchProvider.brave.rawValue { hasBraveKey = WebPreferences.BraveKey.cachedRead() != nil } }
                     LXButton(title: testing ? "Testing…" : "Run test") { runTest() }.disabled(testing)
                 }
             }
@@ -364,9 +365,10 @@ struct WebSearchSettings: View {
         Task {
             defer { testing = false }
             do {
+                let current = WebPreferences.config
                 let researcher = try WebResearcher(config: WebSearchConfig(
-                    provider: WebPreferences.config.provider, braveKey: WebPreferences.config.braveKey,
-                    searxngURL: WebPreferences.config.searxngURL, maxResults: 3, pagesToRead: 1))
+                    provider: current.provider, braveKey: current.braveKey,
+                    searxngURL: current.searxngURL, maxResults: 3, pagesToRead: 1))
                 let ctx = try await researcher.research("Apple Silicon MLX framework")
                 testResult = "OK — \(ctx.sources.count) results, read \(ctx.pageText.count) page(s): \(ctx.sources.first?.host ?? "")"
             } catch {

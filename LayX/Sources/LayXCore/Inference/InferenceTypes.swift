@@ -149,10 +149,23 @@ public struct EngineSettings: Sendable, Hashable, Codable {
     public var memoryLimitBytes: Int64?
     /// KV-cache quantization bits (`nil` = off, 8 or 4).
     public var kvBits: Int?
+    /// Upper bound for the share of time the GPU spends generating (0.3–1.0). Below 1, the engine pauses
+    /// between tokens in proportion to the time each token took, leaving GPU time for the UI and other apps.
+    public var gpuLimit: Double
 
-    public init(memoryLimitBytes: Int64? = nil, kvBits: Int? = nil) {
+    public init(memoryLimitBytes: Int64? = nil, kvBits: Int? = nil, gpuLimit: Double = 1) {
         self.memoryLimitBytes = memoryLimitBytes
         self.kvBits = kvBits.flatMap { [4, 8].contains($0) ? $0 : nil }
+        self.gpuLimit = min(max(gpuLimit, 0.3), 1)
+    }
+
+    /// Pause to insert after each token, given the unthrottled per-token time `tokenTime` (seconds).
+    /// MLX schedules the next step before the current token is consumed, so the GPU keeps working during the
+    /// pause; the token interval then becomes ≈ max(tokenTime, pause). Pausing tokenTime / gpuLimit makes the GPU
+    /// busy ≈ gpuLimit of the time. Capped at 0.25 s.
+    public func pause(forTokenTime tokenTime: Double) -> Double {
+        guard gpuLimit < 0.999, tokenTime > 0 else { return 0 }
+        return min(tokenTime / gpuLimit, 0.25)
     }
 
     /// Effective weight budget for load-time checks.

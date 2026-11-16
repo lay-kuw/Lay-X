@@ -37,6 +37,16 @@ public enum LayXSchema {
         Migration(version: 2, sql: """
             ALTER TABLE pinned_message ADD COLUMN sources BLOB;
             """),
+        // API key *hashes* (SHA-256 of random keys; the keys themselves are never stored anywhere).
+        Migration(version: 3, sql: """
+            CREATE TABLE api_key (
+                id          TEXT PRIMARY KEY NOT NULL,
+                name        TEXT NOT NULL,
+                prefix      TEXT NOT NULL,
+                hash        TEXT NOT NULL,
+                created_at  REAL NOT NULL
+            );
+            """),
     ]
 
     public static let fileName = "LayX.sqlite"

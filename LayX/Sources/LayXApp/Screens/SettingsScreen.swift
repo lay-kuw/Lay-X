@@ -48,6 +48,7 @@ struct SettingsScreen: View {
     @AppStorage(EnginePreferences.keepLoadedKey) private var keepLoaded = 15
     @AppStorage(EnginePreferences.memoryLimitKey) private var memoryLimitGB = 0.0
     @AppStorage(EnginePreferences.kvBitsKey) private var kvBits = 0
+    @AppStorage(EnginePreferences.gpuLimitKey) private var gpuLimit = 1.0
     @AppStorage(WorkProjects.defaultWorkModelKey) private var defaultWorkID = ""
     @AppStorage(ChatPreferences.temperatureKey) private var temperature = ChatPreferences.defaultTemperature
     @AppStorage(ChatPreferences.topPKey) private var topP = ChatPreferences.defaultTopP
@@ -192,6 +193,9 @@ struct SettingsScreen: View {
                                            range: 8...max(16, (EnginePreferences.physicalGB * 0.9).rounded())) {
                                 memoryLimitGB == 0 ? "Auto" : "\(Int($0)) GB"
                             }
+                        }
+                        row("GPU usage limit", "Caps how much of the GPU generation may use, leaving headroom for smooth scrolling and other apps. Lower = smoother UI, slower replies") {
+                            GradientSlider(value: $gpuLimit, range: 0.3...1) { $0 >= 0.995 ? "Max" : "\(Int(($0 * 100).rounded()))%" }
                         }
                         row("KV cache quantization", "8-bit halves cache size with negligible quality loss") {
                             Segmented(options: [(0, "Off"), (8, "8-bit"), (4, "4-bit")], selection: $kvBits, mono: true)

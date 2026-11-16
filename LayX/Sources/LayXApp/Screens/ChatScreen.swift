@@ -332,7 +332,7 @@ struct ChatThread: View {
                         VStack(alignment: .leading, spacing: 12) {
                             HStack(spacing: 8) {
                                 Text(modelName).font(LX.F.ui(12.5, .semibold))
-                                Text(statusText).font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan)
+                                LiveStatusText(text: statusText)
                             }
                             BlinkingCaret()
                         }
@@ -419,7 +419,7 @@ struct MessageView: View, Equatable {
             HStack(spacing: 8) {
                 Text(author).font(LX.F.ui(12.5, .semibold))
                 if streaming {
-                    Text("streaming…").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan)
+                    LiveStatusText(text: ThinkingParser.split(message.content).isThinking ? "Thinking…" : "Writing…")
                 } else {
                     Text(meta).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
                 }

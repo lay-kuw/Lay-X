@@ -299,6 +299,21 @@ func object(_ b: ByteBuffer) throws -> [String: Any] {
         #expect(APIKeys.generate() != APIKeys.generate())
     }
 
+    @Test func databaseKeyStorePersistsHashesOnly() async throws {
+        let db = try SQLiteDatabase(location: .inMemory, migrations: LayXSchema.migrations)
+        let store = await DatabaseAPIKeyStore(database: db)
+        let (secret, record) = try APIKeys.create(name: "lan", in: store)
+        try await Task.sleep(for: .milliseconds(50))
+        let reopened = await DatabaseAPIKeyStore(database: db)
+        #expect(APIKeys.verify(secret, in: try reopened.all())?.id == record.id)
+        let rows = try await db.query("SELECT * FROM api_key")
+        #expect(rows.count == 1 && rows[0]["hash"].text == APIKeys.hash(secret))
+        #expect(!rows.contains { r in r.values.values.contains { $0.text == secret } }, "the key itself is never stored")
+        try reopened.remove(id: record.id)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(try await db.query("SELECT * FROM api_key").isEmpty)
+    }
+
     @Test func portValidation() {
         #expect(APIServerConfiguration(port: 1234).isValidPort)
         #expect(!APIServerConfiguration(port: 80).isValidPort)

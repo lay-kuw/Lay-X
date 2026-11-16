@@ -172,6 +172,11 @@ import Testing
         #expect(EngineSettings(memoryLimitBytes: 100 * gb).weightBudget(physicalMemory: 64 * gb) < 64 * gb)
         #expect(EngineSettings(kvBits: 3).kvBits == nil)
         #expect(EngineSettings(kvBits: 8).kvBits == 8)
+        #expect(EngineSettings(gpuLimit: 1).pause(forTokenTime: 0.02) == 0)
+        #expect(abs(EngineSettings(gpuLimit: 0.5).pause(forTokenTime: 0.02) - 0.04) < 1e-9)   // interval 2× → 50 %
+        #expect(abs(EngineSettings(gpuLimit: 0.8).pause(forTokenTime: 0.02) - 0.025) < 1e-9)  // interval 1.25× → 80 %
+        #expect(EngineSettings(gpuLimit: 0.1).gpuLimit == 0.3)
+        #expect(EngineSettings(gpuLimit: 0.3).pause(forTokenTime: 2) == 0.25)
     }
 
     @Test func parametersAreClamped() {

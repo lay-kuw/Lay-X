@@ -29,7 +29,7 @@ struct WebSearchMenu: View {
         }
         .buttonStyle(PressScaleStyle())
         .onHover { h in withAnimation(LX.M.hover) { hover = h } }
-        .help("Web search: \(mode.title) — click to switch (Off → Auto → On). Only the search query is sent to \(WebPreferences.config.provider.title); files and chats are never uploaded.")
+        .help("Web search: \(mode.title) — click to switch (Off → Auto → On). Only the search query is sent to \(WebPreferences.provider.title); files and chats are never uploaded.")
         .contextMenu {
             Button("Web Search Settings…") {
                 AppState.shared.settingsCategory = .web

@@ -83,6 +83,7 @@ final class AppServices {
             pinnedChats = PinnedChatRepository(database: db)
             await chats.replaceRepository(pinnedChats)
             await performance.replaceStore(BenchmarkStore(database: db))
+            await api.useDatabase(db)
         } catch {
             // Fall back to whatever is at the old location so pinning keeps working.
             if let db = try? SQLiteDatabase(location: .file(oldURL), migrations: LayXSchema.migrations) {
