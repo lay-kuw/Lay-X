@@ -206,47 +206,67 @@ nonisolated enum CommandLineTools {
             }
             try await CacheCheck.run(model: model)
         case "--image-check":
-            // LayX --image-check [text-model-id]  — downloads SDXL Turbo if needed, generates, checks arbitration.
-            // LAYX_IMAGE_RESERVE_GB=n pretends n GB less memory is free (exercises unloading the text model).
-            let spec = ImageModelSpec.sdxlTurbo
-            if store.installedModel(spec.id) == nil {
+            // LayX --image-check [image-model] [text-model]
+            //   Downloads the image model if needed (default SDXL Turbo), generates, checks memory arbitration.
+            //   LAYX_IMAGE_SIZE=WxH  LAYX_IMAGE_STEPS=n  LAYX_IMAGE_CFG=x  LAYX_IMAGE_NEG="…"  LAYX_IMAGE_PROMPT="…"
+            //   LAYX_IMAGE_LORA=/path/a.safetensors:0.8  LAYX_IMAGE_OUT=folder (copies the images there)
+            //   LAYX_IMAGE_RESERVE_GB=n pretends n GB less memory is free.
+            let env = ProcessInfo.processInfo.environment
+            let imageID = args.count >= 3 ? (ModelRepoID(args[2]) ?? ImageModelSpec.sdxlTurbo.id) : ImageModelSpec.sdxlTurbo.id
+            let spec = ImageModelSpec.spec(for: imageID)
+            if !(store.installedModel(spec.id)?.isImageModel ?? false) {
                 let downloader = ModelDownloader(store: store, architectures: MLXArchitectureSupport())
                 let watcher = Task {
                     var last = -1
                     for await states in await downloader.updates() {
                         if case .active(let p)? = states[spec.id] {
-                            let pct = Int(p.fraction * 100) / 5 * 5
+                            let pct = Int(p.fraction * 100) / 10 * 10
                             if pct != last { last = pct; print("download \(p.phase.rawValue) \(pct)% \(p.receivedBytes / 1_000_000) MB") }
                         }
                     }
                 }
                 let t0 = Date()
-                let installed = try await downloader.download(spec.id, profile: spec.downloadProfile)
+                let installed = try await downloader.download(spec.id, profile: .sdxl)
                 watcher.cancel()
-                print(String(format: "installed in %.0f s, %.2f GB, kind %@", Date().timeIntervalSince(t0),
-                             Double(installed.diskBytes) / 1e9, installed.manifest.kind?.rawValue ?? "nil"))
+                print(String(format: "installed in %.0f s, %.2f GB, files: %@", Date().timeIntervalSince(t0), Double(installed.diskBytes) / 1e9,
+                             installed.manifest.files.map(\.path).filter { $0.hasSuffix(".safetensors") }.joined(separator: ", ")))
             }
             let coordinator = InferenceCoordinator(engine: MLXEngine())
-            if args.count >= 3, let id = ModelRepoID(args[2]), let text = store.installedModel(id) {
+            if args.count >= 4, let id = ModelRepoID(args[3]), let text = store.installedModel(id) {
                 try await coordinator.load(text.reference)
                 print("text model loaded: \(id)")
             }
-            let reserve = Int64((Double(ProcessInfo.processInfo.environment["LAYX_IMAGE_RESERVE_GB"] ?? "0") ?? 0) * 1_073_741_824)
+            let reserve = Int64((Double(env["LAYX_IMAGE_RESERVE_GB"] ?? "0") ?? 0) * 1_073_741_824)
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lx-image-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let loraDir = dir.appendingPathComponent("loras")
+            var choices: [LoRAChoice] = []
+            if let raw = env["LAYX_IMAGE_LORA"] {
+                let parts = raw.split(separator: ":")
+                let src = URL(fileURLWithPath: String(parts[0]))
+                let info = try LoRALibrary(folder: loraDir).importFile(src)
+                print("lora: \(info.name) fit=\(info.fit) base=\(info.baseModel ?? "-") triggers=\(info.triggerWords)")
+                choices = [LoRAChoice(file: info.file, scale: parts.count > 1 ? Double(parts[1]) ?? 1 : 1)]
+            }
             let db = try SQLiteDatabase(location: .file(dir.appendingPathComponent("t.sqlite")), migrations: LayXSchema.migrations)
             let studio = await MainActor.run {
                 ImageStudio(engine: MLXImageEngine(), coordinator: coordinator,
                             store: ImageHistoryStore(database: db, folder: dir.appendingPathComponent("images")),
+                            loras: LoRALibrary(folder: loraDir),
                             modelDirectory: { store.installedModel($0.id)?.directory },
                             availableMemory: { SystemMemory.availableBytes() - reserve })
             }
-            print(String(format: "free memory before: %.1f GB (reserve %.0f GB)", Double(SystemMemory.availableBytes()) / 1e9, Double(reserve) / 1e9))
-            for (label, steps, count) in [("cold (load + 1 image)", 2, 1), ("warm, 2 images", 2, 2), ("warm, 4 steps", 4, 1)] {
+            let sizeParts = (env["LAYX_IMAGE_SIZE"] ?? "").split(separator: "x").compactMap { Int($0) }
+            let size = sizeParts.count == 2 ? ImageSize(sizeParts[0], sizeParts[1]) : spec.defaultSize
+            let steps = Int(env["LAYX_IMAGE_STEPS"] ?? "") ?? spec.defaultSteps
+            let cfg = Double(env["LAYX_IMAGE_CFG"] ?? "") ?? spec.defaultCFG
+            let prompt = env["LAYX_IMAGE_PROMPT"] ?? "a cozy reading nook with a sleeping cat, warm light, watercolor"
+            print("model \(spec.name) · \(size.label) · \(steps) steps · CFG \(cfg) · free \(String(format: "%.1f", Double(SystemMemory.availableBytes()) / 1e9)) GB")
+            for (label, count) in [("cold (load + 1 image)", 1), ("warm, same seed", 1)] {
                 let t = Date()
                 await MainActor.run {
-                    studio.generate(ImageRequest(prompt: "a cozy reading nook with a sleeping cat, warm light, watercolor",
-                                                 steps: steps, seed: 42, count: count), spec: spec)
+                    studio.generate(ImageRequest(prompt: prompt, negativePrompt: env["LAYX_IMAGE_NEG"] ?? "", steps: steps, cfg: cfg,
+                                                 seed: 42, count: count, size: size, loras: choices), spec: spec)
                 }
                 try await Task.sleep(for: .milliseconds(50))
                 while await MainActor.run(body: { studio.isBusy }) { try await Task.sleep(for: .milliseconds(20)) }
@@ -254,11 +274,18 @@ nonisolated enum CommandLineTools {
                 print(String(format: "%@: %.2f s, history %d, error %@, notice %@", label, Date().timeIntervalSince(t), n, err ?? "-", notice ?? "-"))
             }
             if let m = await coordinator.memory() {
-                print(String(format: "MLX active %.1f GB, peak %.1f GB", Double(m.activeBytes) / 1e9, Double(m.peakBytes) / 1e9))
+                print(String(format: "MLX peak %.1f GB", Double(m.peakBytes) / 1e9))
             }
-            print("text model still loaded: \(await coordinator.snapshot.model.loadedModel != nil)")
-            // Reverse direction: loading the text model again frees the idle image model when memory is short.
-            if args.count >= 3, let id = ModelRepoID(args[2]), let text = store.installedModel(id) {
+            let records = await MainActor.run { studio.history }
+            let urls = await MainActor.run { records.compactMap { studio.url(for: $0) } }
+            if urls.count >= 2 { print("seed reproducible: \((try? Data(contentsOf: urls[0])) == (try? Data(contentsOf: urls[1])))") }
+            if let out = env["LAYX_IMAGE_OUT"], let first = urls.last {
+                let target = URL(fileURLWithPath: out).appendingPathComponent("\(spec.id.name)-\(size.width)x\(size.height)\(choices.isEmpty ? "" : "-lora").png")
+                try? FileManager.default.removeItem(at: target)
+                try FileManager.default.copyItem(at: first, to: target)
+                print("image: \(target.path)")
+            }
+            if args.count >= 4, let id = ModelRepoID(args[3]), let text = store.installedModel(id) {
                 await coordinator.setBeforeLoad { reference in
                     let need = Int64(Double(ModelStore.allocatedSize(of: reference.directory)) * 1.2)
                     guard SystemMemory.availableBytes() - reserve < need else { return }
@@ -267,14 +294,6 @@ nonisolated enum CommandLineTools {
                 try await coordinator.load(text.reference)
                 let imageLoaded = await MainActor.run { studio.loadedModelID != nil }
                 print("text model reloaded: \(await coordinator.snapshot.model.loadedModel != nil), image model still loaded: \(imageLoaded)")
-            }
-            let first = await MainActor.run { studio.history.last.flatMap { studio.url(for: $0) } }
-            if let first { print("image: \(first.path)") }
-            // Determinism: same seed → same image.
-            let records = await MainActor.run { studio.history }
-            if records.count >= 2, let a = await MainActor.run(body: { studio.url(for: records[records.count - 1]) }),
-               let b = await MainActor.run(body: { studio.url(for: records[records.count - 2]) }) {
-                print("seed 42 reproducible: \((try? Data(contentsOf: a)) == (try? Data(contentsOf: b)))")
             }
         case "--watch-check":
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lx-watch-\(UUID().uuidString)")

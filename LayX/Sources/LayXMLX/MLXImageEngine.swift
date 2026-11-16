@@ -14,25 +14,21 @@ public actor MLXImageEngine: ImageEngine {
 
     public init() {}
 
-    static func configuration(for spec: ImageModelSpec) -> StableDiffusionConfiguration? {
-        switch spec.modelType {
-        case "sdxl-turbo": StableDiffusionConfiguration.presetSDXLTurbo
-        default: nil
-        }
-    }
-
-    public func load(_ spec: ImageModelSpec, directory: URL) async throws {
+    /// Every supported model is an SDXL pipeline in diffusers layout; files are picked from the folder.
+    public func load(_ spec: ImageModelSpec, directory: URL, loras: [LoRAFile]) async throws -> LoRALoadReport {
         await unload()
-        guard let config = Self.configuration(for: spec) else {
-            throw ImageEngineError.loadFailed("unsupported image model \(spec.modelType)")
-        }
+        let config = StableDiffusionConfiguration.sdxl(
+            id: spec.id.description, directory: directory, defaultSteps: spec.defaultSteps, defaultCFG: Float(spec.defaultCFG))
         do {
+            let set = loras.isEmpty ? nil : try LoRASet(files: loras.map { ($0.url, Float($0.scale)) })
             let container = try StableDiffusionMLX.ModelContainer<TextToImageGenerator>.createTextToImageGenerator(
                 directory: ModelDirectory(url: directory), configuration: config,
-                loadConfiguration: LoadConfiguration(float16: true, quantize: false))
+                loadConfiguration: LoadConfiguration(float16: true, quantize: false, loras: set))
             try await container.perform { $0.ensureLoaded() }
             generator = container
             configuration = config
+            Memory.clearCache()
+            return LoRALoadReport(appliedLayers: set?.report.appliedLayers ?? 0, skippedLayers: set?.report.skippedLayers ?? 0)
         } catch {
             Memory.clearCache()
             throw ImageEngineError.loadFailed((error as? LocalizedError)?.errorDescription ?? "\(error)")
@@ -66,8 +62,9 @@ public actor MLXImageEngine: ImageEngine {
                 parameters.prompt = request.prompt
                 parameters.negativePrompt = request.negativePrompt
                 parameters.steps = request.steps
+                parameters.cfgWeight = Float(request.cfg)
                 parameters.seed = request.seed &+ UInt64(index)
-                parameters.latentSize = [request.size / 8, request.size / 8]
+                parameters.latentSize = [request.size.height / 8, request.size.width / 8]
                 parameters.imageCount = 1
                 let seed = parameters.seed
                 let total = parameters.steps

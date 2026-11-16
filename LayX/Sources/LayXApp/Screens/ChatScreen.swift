@@ -208,7 +208,7 @@ struct ModelPickerPanel: View {
             .fixedSize(horizontal: false, vertical: true)
             Rectangle().fill(LX.C.divider).frame(height: 1)
             PickerRowButton {
-                state.modelsTab = .installed
+                state.modelsKind = .language; state.modelsTab = .installed
                 state.screen = .models
                 close()
             } content: {
@@ -274,7 +274,7 @@ struct ModelPickerPanel: View {
                         Button("Load") { library.load(m); close() }
                         Button("Use for New Chats") { UserDefaults.standard.set(m.id.description, forKey: ChatPreferences.defaultChatModelKey) }
                         Divider()
-                        Button("Show in Models") { state.modelsTab = .installed; state.screen = .models; close() }
+                        Button("Show in Models") { state.modelsKind = .language; state.modelsTab = .installed; state.screen = .models; close() }
                     } label: {
                         Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(LX.C.tertiary)
                             .frame(width: 24, height: 24).contentShape(Rectangle())
@@ -631,7 +631,7 @@ struct EmptyChat: View {
             }
             if library.installed.isEmpty {
                 LXButton(title: "Open Models", symbol: "shippingbox", kind: .primary) {
-                    state.modelsTab = .discover
+                    state.modelsKind = .language; state.modelsTab = .discover
                     state.screen = .models
                 }
             }

@@ -37,7 +37,7 @@ lights that shimmer while the model thinks. 🔮
 | 💬 **Chat** | Streaming replies, Markdown & code, collapsible reasoning (“Thinking” on/off), rename, ★ pin to keep |
 | 🪄 **Mini Chat** | Press **⌥ Space** anywhere → a floating glass box appears. Ask, read, done. |
 | 🛠️ **Work** | Open a project folder, describe a change, get a **diff**. Nothing is written until you press **Apply**. |
-| 🎨 **Image** | Type a prompt, get a picture — SDXL Turbo on MLX, about a second per image, fully offline after one download. |
+| 🎨 **Image** | Type a prompt, get a picture — SDXL‑family models on MLX (DreamShaper, RealVis, Juggernaut, Animagine…), LoRA, fully offline. |
 | 🌐 **Web search** | Off / Auto / On. DuckDuckGo, Brave or your own SearXNG — only the *query* ever leaves your Mac. |
 | 📦 **Models** | Browse & download MLX models from Hugging Face (trending, likes, downloads…), resume, verify, manage. |
 | 📈 **Performance** | Live speed cards in plain words + real benchmarks (TTFT, prefill, decode, context sweeps). |
@@ -111,15 +111,28 @@ code streams in live, the files it's reading or writing glow in the tree, and if
 
 ## 🎨 Image, the tiny painter
 
-Open **Image**, download **SDXL Turbo** once (~7 GB), then just describe what you want and press **Generate**
-(⌘ Return). Pick 1–4 steps, 1–4 images, and a seed if you want the exact same picture again. Every image lands
-in the history grid — copy it, save it anywhere, reuse its prompt & seed, or toss it. 🖼️
+Pick an image model in **Models → Image** (download once, ~7 GB), choose it with the 🎨 palette picker in
+**Image**, describe what you want and press **Generate** (⌘ Return). Every image lands in the history grid — copy
+it, save it anywhere, reuse its prompt & seed, or toss it. 🖼️
+
+| Model | Good at |
+|---|---|
+| DreamShaper XL Turbo | ⭐ high quality at 1024 px in ~6 steps — start here |
+| SDXL 1.0 | the classic all‑rounder (~30 steps) |
+| RealVisXL 5 · Juggernaut XL 9 | photographs, portraits, cinematic scenes |
+| Animagine XL 4 | anime illustration |
+| SDXL Turbo | instant 512 px drafts |
+| *any SDXL repo* | paste `owner/name` (diffusers format) in Models |
+
+Tweak **size** (SDXL aspect ratios up to 1344 × 768), **steps**, **guidance (CFG)**, an optional **negative
+prompt** (folded away until you need it), the number of images and the **seed**. Add **LoRA** files
+(`.safetensors`, SDXL — kohya or diffusers format) to change the style or teach a subject; each has its own
+strength slider, and Lay X tells you how many layers it changed. 🧩
 
 Chat and images share one Mac politely: they never use the GPU at the same time, and if memory is tight Lay X
 unloads whichever model is idle (and tells you) so the other one fits. ✨
 
-> SDXL Turbo is made by Stability AI and comes with its own
-> [license](https://huggingface.co/stabilityai/sdxl-turbo/blob/main/LICENSE.md) — please give it a read.
+> Each model comes with its own license (linked in Models) — SDXL Turbo's, for example, limits commercial use.
 
 ## 🔌 Use it from other apps
 
@@ -155,6 +168,7 @@ Anything that speaks the OpenAI chat API can point its base URL at `http://127.0
 | Models | `~/.config/lay-x/models` (changeable in Settings) |
 | Pinned chats, benchmarks & image history | `~/.config/lay-x/database/LayX.sqlite` (changeable in Settings) |
 | Generated images | `~/.config/lay-x/images` |
+| LoRAs | `~/.config/lay-x/loras` |
 | Temporary chats | nowhere — memory only 🫧 |
 
 ## 🧩 Project layout
@@ -165,7 +179,7 @@ Lay-X/
 │   ├── Sources/
 │   │   ├── LayXCore     chats, prompts, inference coordinator, models, Work, performance, SQLite
 │   │   ├── LayXMLX      the MLX engines (text: mlx-swift-lm · images: Stable Diffusion)
-│   │   ├── StableDiffusionMLX  SDXL Turbo on MLX (vendored, MIT)
+│   │   ├── StableDiffusionMLX  SDXL on MLX + LoRA merging (vendored, MIT)
 │   │   ├── LayXServer   OpenAI-compatible server (Hummingbird)
 │   │   └── LayXApp      SwiftUI app, design system, screens, Mini Chat
 │   ├── Tests/

@@ -1,0 +1,230 @@
+import AppKit
+import SwiftUI
+import LayXCore
+
+/// Models → Image: installed image models and the curated catalog (downloads use the shared downloader).
+struct ImageModelsPane: View {
+    let tab: ModelsScreen.Tab
+    let filter: String
+    @EnvironmentObject var state: AppState
+    @State private var selection: String?
+    @State private var confirmDelete: InstalledModel?
+    private var library: ModelLibrary { AppServices.shared.models }
+    private var studio: ImageStudio { AppServices.shared.images }
+
+    private var catalog: [ImageModelSpec] {
+        let q = filter.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty ? ImageModelSpec.catalog : ImageModelSpec.catalog.filter {
+            $0.name.localizedCaseInsensitiveContains(q) || $0.style.localizedCaseInsensitiveContains(q) || $0.id.description.localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if tab == .installed { installed } else { discover }
+                    ForEach(library.activeDownloads.filter { d in ImageModelSpec.spec(d.id.description) != nil }, id: \.id) { d in
+                        HStack(spacing: 10) {
+                            Image(systemName: "arrow.down.circle.fill").foregroundStyle(LX.C.liveCyan)
+                                .symbolEffect(.pulse, options: .repeating)
+                            Text(ImageModelSpec.spec(for: d.id).name).font(LX.F.ui(12.5, .medium))
+                            ProgressView(value: d.progress.fraction).tint(LX.C.accent)
+                            Text("\(Int(d.progress.fraction * 100))%").font(LX.F.mono(11)).foregroundStyle(LX.C.secondary)
+                            IconButton(symbol: "xmark", help: "Cancel") { library.cancelDownload(d.id) }
+                        }
+                        .padding(.horizontal, 12).frame(height: 44).well()
+                    }
+                }
+                .padding(16)
+            }
+            Rectangle().fill(LX.C.divider).frame(width: 1)
+            details.frame(width: 320)
+        }
+        .onAppear {
+            if selection == nil {
+                selection = tab == .installed ? (ImagePreferences.spec?.id.description ?? library.imageModels.first?.id.description)
+                                              : ImageModelSpec.catalog.first?.id.description
+            }
+        }
+        .confirmationDialog("Delete \(confirmDelete.map { ImageModelSpec.spec(for: $0.id).name } ?? "model")?",
+                            isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
+                            presenting: confirmDelete) { m in
+            Button("Delete \(ModelDisplay.bytes(m.diskBytes))", role: .destructive) {
+                Task {
+                    if studio.loadedModelID == m.id.description { await studio.unloadModel() }
+                    library.delete(m.id, loadedID: nil)
+                }
+            }
+        } message: { _ in
+            Text("The model files are removed from this Mac. Your generated images stay.")
+        }
+    }
+
+    // MARK: Installed
+
+    private var installed: some View {
+        VStack(spacing: 0) {
+            header(["Image model", "Style", "Size", "Default"])
+            ForEach(library.imageModels) { m in
+                let spec = ImageModelSpec.spec(for: m.id)
+                let id = m.id.description
+                let inUse = ImagePreferences.spec?.id == m.id
+                row(selected: selection == id) {
+                    HStack(spacing: 9) {
+                        if studio.loadedModelID == id { LiveDot() } else { Color.clear.frame(width: 6, height: 6) }
+                        Image(systemName: "paintpalette").font(.system(size: 11)).foregroundStyle(inUse ? LX.C.accentText : LX.C.tertiary)
+                        Text(spec.name).font(LX.F.ui(12.5, .medium)).lineLimit(1)
+                        if inUse { Tag(text: "IN IMAGE", color: LX.C.accentText) }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(spec.style).font(LX.F.ui(12)).foregroundStyle(LX.C.secondary).frame(width: 140, alignment: .leading)
+                    Text(ModelDisplay.bytes(m.diskBytes)).font(LX.F.mono(12)).frame(width: 80, alignment: .trailing)
+                    Text("\(spec.defaultSteps) steps").font(LX.F.mono(12)).foregroundStyle(LX.C.tertiary).frame(width: 90, alignment: .trailing)
+                }
+                .onTapGesture { selection = id }
+                .simultaneousGesture(TapGesture(count: 2).onEnded { use(m.id) })
+            }
+            if library.imageModels.isEmpty {
+                Text("No image models yet — pick one in Discover.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).frame(height: LX.S.tableRow)
+            }
+        }
+        .well().clipShape(RoundedRectangle(cornerRadius: LX.R.lg))
+    }
+
+    // MARK: Discover
+
+    private var discover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(spacing: 0) {
+                header(["Image model", "Style", "Download", "Status"])
+                ForEach(catalog) { spec in
+                    let id = spec.id.description
+                    row(selected: selection == id) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(spec.name).font(LX.F.ui(12.5, .medium)).lineLimit(1)
+                            Text(spec.summary).font(LX.F.ui(11)).foregroundStyle(LX.C.tertiary).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(spec.style).font(LX.F.ui(12)).foregroundStyle(LX.C.secondary).frame(width: 140, alignment: .leading)
+                        Text(ModelDisplay.bytes(spec.downloadBytes)).font(LX.F.mono(12)).frame(width: 80, alignment: .trailing)
+                        status(spec).frame(width: 90, alignment: .trailing)
+                    }
+                    .onTapGesture { selection = id }
+                }
+            }
+            .well().clipShape(RoundedRectangle(cornerRadius: LX.R.lg))
+            Text("Any SDXL model in diffusers format works: paste its Hugging Face repo (owner/name) above and press Add model.")
+                .font(LX.F.caption).foregroundStyle(LX.C.tertiary)
+        }
+    }
+
+    @ViewBuilder private func status(_ spec: ImageModelSpec) -> some View {
+        if library.imageModel(spec) != nil {
+            Text("Installed").font(LX.F.ui(11)).foregroundStyle(LX.C.ok)
+        } else if case .active(let p)? = library.downloads[spec.id] {
+            Text("\(Int(p.fraction * 100))%").font(LX.F.mono(11)).foregroundStyle(LX.C.liveCyan)
+        } else {
+            Button("Download") { library.download(spec.id, kind: .image) }
+                .buttonStyle(.plain).font(LX.F.ui(11.5, .semibold)).foregroundStyle(LX.C.accentText)
+        }
+    }
+
+    // MARK: Details
+
+    @ViewBuilder private var details: some View {
+        let id = selection.flatMap(ModelRepoID.init)
+        if let id {
+            let spec = ImageModelSpec.spec(for: id)
+            let installed = library.imageModels.first { $0.id == id }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(spec.name).font(LX.F.ui(16, .semibold))
+                        Text(id.description).font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary).textSelection(.enabled)
+                    }
+                    Text(spec.summary).font(LX.F.body).foregroundStyle(LX.C.body).fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 6) {
+                        kv("Style", spec.style)
+                        kv("Publisher", spec.publisher)
+                        kv("Default", "\(spec.defaultSize.label) · \(spec.defaultSteps) steps · CFG \(spec.defaultCFG <= 1 ? "off" : String(format: "%.1f", spec.defaultCFG))")
+                        kv("On disk", installed.map { ModelDisplay.bytes($0.diskBytes) } ?? "≈ \(ModelDisplay.bytes(spec.downloadBytes)) download")
+                        kv("Memory", String(format: "≈ %.0f GB at %@", Double(spec.runtimeBytes(for: spec.defaultSize)) / 1_073_741_824, spec.defaultSize.label))
+                        HStack {
+                            Text("License").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary).frame(width: 80, alignment: .leading)
+                            Link(spec.license, destination: spec.licenseURL).font(LX.F.ui(12)).foregroundStyle(LX.C.accentText)
+                        }
+                    }
+                    if let installed {
+                        HStack(spacing: 8) {
+                            LXButton(title: "Use in Image", symbol: "paintpalette", kind: .primary) { use(installed.id) }
+                            IconButton(symbol: "magnifyingglass", help: "Show in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([installed.directory])
+                            }
+                            IconButton(symbol: "trash", help: "Delete model") { confirmDelete = installed }
+                                .disabled(studio.isBusy)
+                        }
+                    } else if case .active(let p)? = library.downloads[id] {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ProgressView(value: p.fraction).tint(LX.C.accent)
+                            HStack {
+                                Text("\(ModelDisplay.bytes(p.receivedBytes)) of \(ModelDisplay.bytes(p.totalBytes))").font(LX.F.mono(11)).foregroundStyle(LX.C.secondary)
+                                Spacer()
+                                LXButton(title: "Cancel") { library.cancelDownload(id) }
+                            }
+                        }
+                    } else {
+                        LXButton(title: "Download", symbol: "arrow.down.circle", kind: .primary) { library.download(id, kind: .image) }
+                        if case .failed(let message)? = library.downloads[id] {
+                            Text(message).font(LX.F.caption).foregroundStyle(LX.C.error)
+                        }
+                    }
+                }
+                .padding(16)
+            }
+        } else {
+            Text("Select a model").font(LX.F.body).foregroundStyle(LX.C.tertiary).frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func use(_ id: ModelRepoID) {
+        ImagePreferences.select(id)
+        state.screen = .image
+    }
+
+    // MARK: Table parts
+
+    private func header(_ titles: [String]) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                th(titles[0]).frame(maxWidth: .infinity, alignment: .leading)
+                th(titles[1]).frame(width: 140, alignment: .leading)
+                th(titles[2]).frame(width: 80, alignment: .trailing)
+                th(titles[3]).frame(width: 90, alignment: .trailing)
+            }
+            .padding(.horizontal, 12).frame(height: 30)
+            Rectangle().fill(LX.C.divider).frame(height: 1)
+        }
+    }
+
+    private func th(_ t: String) -> some View {
+        Text(t.uppercased()).font(LX.F.label).kerning(0.6).foregroundStyle(LX.C.tertiary)
+    }
+
+    private func row<C: View>(selected: Bool, @ViewBuilder _ content: () -> C) -> some View {
+        HStack(spacing: 0) { content() }
+            .foregroundStyle(LX.C.body)
+            .padding(.horizontal, 12).frame(height: 48)
+            .background(LX.C.accent.opacity(selected ? 0.08 : 0))
+            .overlay(alignment: .bottom) { Rectangle().fill(LX.C.rowLine).frame(height: 1) }
+            .contentShape(Rectangle())
+    }
+
+    private func kv(_ k: String, _ v: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(k).font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary).frame(width: 80, alignment: .leading)
+            Text(v).font(LX.F.ui(12)).foregroundStyle(LX.C.body).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}

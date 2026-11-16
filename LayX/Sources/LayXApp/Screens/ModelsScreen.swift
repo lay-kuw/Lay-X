@@ -25,7 +25,8 @@ struct ModelsScreen: View {
     private var pastedRepo: ModelRepoID? {
         let raw = filter.trimmingCharacters(in: .whitespaces)
             .replacingOccurrences(of: "https://huggingface.co/", with: "")
-        guard let id = ModelRepoID(raw), library.model(id.description) == nil else { return nil }
+        guard let id = ModelRepoID(raw), library.model(id.description) == nil,
+              !library.imageModels.contains(where: { $0.id == id }) else { return nil }
         return id
     }
 
@@ -33,17 +34,23 @@ struct ModelsScreen: View {
         VStack(spacing: 0) {
             ScreenHeader {
                 Text("Models").font(LX.F.title)
+                Segmented(options: [(ModelKind.language, "Text"), (.image, "Image")], selection: $state.modelsKind)
+                    .padding(.leading, 10)
+                    .help("Text models are used by Chat, Work and the API; image models by Image")
                 Segmented(options: [(Tab.installed, "Installed"), (.discover, "Discover"), (.downloads, "Downloads")],
                           selection: $state.modelsTab,
                           indicators: library.activeDownloads.isEmpty ? [:] : [.downloads: "arrow.down.circle.fill"])
                     .padding(.leading, 10)
             } trailing: {
-                LXField(placeholder: "Filter or paste HF repo", text: $filter, symbol: "magnifyingglass").frame(width: 220)
+                LXField(placeholder: state.modelsKind == .image ? "Paste an SDXL repo" : "Filter or paste HF repo", text: $filter, symbol: "magnifyingglass").frame(width: 220)
                     .onSubmit { addModel() }
                 LXButton(title: "Add model", symbol: "plus", shortcut: "⌘⇧N", kind: .primary) { addModel() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
             }
 
+            if state.modelsKind == .image && tab != .downloads {
+                ImageModelsPane(tab: tab, filter: filter)
+            } else {
             HStack(spacing: 0) {
                 ScrollView {
                     VStack(spacing: 14) {
@@ -62,6 +69,7 @@ struct ModelsScreen: View {
                 }
                 Rectangle().fill(LX.C.divider).frame(width: 1)
                 details.frame(width: 320)
+            }
             }
         }
         .overlay(alignment: .bottom) {
@@ -96,7 +104,7 @@ struct ModelsScreen: View {
 
     private func addModel() {
         if let id = pastedRepo {
-            library.download(id)
+            library.download(id, kind: state.modelsKind)
             state.modelsTab = .downloads
             filter = ""
         } else {

@@ -36,7 +36,8 @@ public struct ImageHistoryStore: Sendable {
 
     /// Writes the PNG and records it. Returns the stored record.
     public func save(png: Data, prompt: String, negativePrompt: String, modelID: String, seed: UInt64, steps: Int,
-                     size: Int, duration: Double, index: Int = 0, date: Date = Date()) async throws -> ImageRecord {
+                     cfg: Double = 0, size: ImageSize, loras: String = "", duration: Double, index: Int = 0,
+                     date: Date = Date()) async throws -> ImageRecord {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         var name = Self.fileName(date: date, seed: seed, index: index)
         var n = 1
@@ -46,13 +47,14 @@ public struct ImageHistoryStore: Sendable {
         }
         try png.write(to: folder.appendingPathComponent(name), options: .atomic)
         let record = ImageRecord(createdAt: date, prompt: prompt, negativePrompt: negativePrompt, modelID: modelID, seed: seed,
-                                 steps: steps, width: size, height: size, file: name, duration: duration)
+                                 steps: steps, cfg: cfg, width: size.width, height: size.height, loras: loras, file: name,
+                                 duration: duration)
         try await db.execute("""
-            INSERT INTO image_generation (id, created_at, prompt, negative, model_id, seed, steps, width, height, file, duration_ms)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO image_generation (id, created_at, prompt, negative, model_id, seed, steps, width, height, file, duration_ms, cfg, loras)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [.text(record.id.uuidString), .double(date.timeIntervalSince1970), .text(prompt), .text(negativePrompt),
-                  .text(modelID), .int(Int64(bitPattern: seed)), .int(Int64(steps)), .int(Int64(size)), .int(Int64(size)),
-                  .text(name), .double(duration * 1000)])
+                  .text(modelID), .int(Int64(bitPattern: seed)), .int(Int64(steps)), .int(Int64(size.width)),
+                  .int(Int64(size.height)), .text(name), .double(duration * 1000), .double(cfg), .text(loras)])
         return record
     }
 
@@ -72,8 +74,9 @@ public struct ImageHistoryStore: Sendable {
                 id: id, createdAt: Date(timeIntervalSince1970: row["created_at"].double ?? 0),
                 prompt: row["prompt"].text ?? "", negativePrompt: row["negative"].text ?? "",
                 modelID: row["model_id"].text ?? "", seed: UInt64(bitPattern: row["seed"].int ?? 0),
-                steps: Int(row["steps"].int ?? 0), width: Int(row["width"].int ?? 0), height: Int(row["height"].int ?? 0),
-                file: file, duration: (row["duration_ms"].double ?? 0) / 1000))
+                steps: Int(row["steps"].int ?? 0), cfg: row["cfg"].double ?? 0,
+                width: Int(row["width"].int ?? 0), height: Int(row["height"].int ?? 0),
+                loras: row["loras"].text ?? "", file: file, duration: (row["duration_ms"].double ?? 0) / 1000))
         }
         for id in missing { try? await db.execute("DELETE FROM image_generation WHERE id = ?", [.text(id)]) }
         return out

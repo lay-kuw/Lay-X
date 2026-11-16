@@ -178,13 +178,17 @@ final class ModelLibrary {
 
     // MARK: Downloads
 
-    func download(_ id: ModelRepoID) {
+    /// Starts or resumes a download. `kind` nil = decide: catalog image models, or a resumed download whose
+    /// partial folder holds `model_index.json` (diffusers pipeline), are image models.
+    func download(_ id: ModelRepoID, kind: ModelKind? = nil) {
+        let partialIndex = store.partialDirectory(for: id).appendingPathComponent("model_index.json")
+        let isImage = kind == .image || (kind == nil && (ImageModelSpec.spec(id.description) != nil
+                                                         || FileManager.default.fileExists(atPath: partialIndex.path)))
         Task {
             do {
-                // Known image models download exactly their pipeline files (also when resuming).
-                let profile = ImageModelSpec.spec(id.description)?.downloadProfile ?? .languageModel
+                let profile: DownloadProfile = isImage ? .sdxl : .languageModel
                 try await downloader.download(id, profile: profile)
-                notice = "\(ImageModelSpec.spec(id.description)?.name ?? ModelDisplay.name(id)) is ready."
+                notice = "\(isImage ? ImageModelSpec.spec(for: id).name : ModelDisplay.name(id)) is ready."
             } catch is CancellationError {
                 refresh()
             } catch {

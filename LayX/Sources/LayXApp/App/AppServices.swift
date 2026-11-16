@@ -144,6 +144,7 @@ final class AppServices {
         #endif
         images = ImageStudio(
             engine: imageEngine, coordinator: coordinator, store: database.flatMap(Self.imageStore),
+            loras: (try? LoRALibrary.defaultFolder()).map(LoRALibrary.init(folder:)),
             modelDirectory: { spec in
                 // Current storage folder (it can be changed in Settings).
                 AppServices.shared.models.store.installedModel(spec.id).flatMap { $0.isImageModel ? $0.directory : nil }
@@ -152,6 +153,7 @@ final class AppServices {
             allowUnloadingTextModel: { ImagePreferences.makeRoom },
             keepLoaded: { ImagePreferences.keepLoaded })
         let images = self.images
+        images.activeLoRAs = ImagePreferences.activeLoRAs
         Task { await images.loadHistory() }
         // Before a text model loads: free an idle image model if the text model wouldn't fit next to it.
         Task {
@@ -308,7 +310,7 @@ struct NoArchitectures: ModelArchitectureSupport {
 }
 
 struct UnavailableImageEngine: ImageEngine {
-    func load(_ spec: ImageModelSpec, directory: URL) async throws {
+    func load(_ spec: ImageModelSpec, directory: URL, loras: [LoRAFile]) async throws -> LoRALoadReport {
         throw ImageEngineError.loadFailed("this build of Lay X was compiled without the MLX engine")
     }
     func unload() async {}

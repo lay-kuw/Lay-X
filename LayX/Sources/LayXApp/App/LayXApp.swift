@@ -190,6 +190,8 @@ final class AppState: ObservableObject {
     @Published var settingsSearch = ""
     @Published var inspector = false
     @Published var modelsTab: ModelsScreen.Tab = .installed
+    /// Models screen shows language (Chat) or image models.
+    @Published var modelsKind: ModelKind = .language
 
     /// Session shown in the main window's Chat screen.
     @Published var currentChatID: UUID?

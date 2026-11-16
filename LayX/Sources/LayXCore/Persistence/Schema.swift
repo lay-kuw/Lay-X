@@ -64,6 +64,10 @@ public enum LayXSchema {
             );
             CREATE INDEX image_generation_created ON image_generation(created_at DESC);
             """),
+        Migration(version: 5, sql: """
+            ALTER TABLE image_generation ADD COLUMN cfg REAL NOT NULL DEFAULT 0;
+            ALTER TABLE image_generation ADD COLUMN loras TEXT NOT NULL DEFAULT '';
+            """),
     ]
 
     public static let fileName = "LayX.sqlite"

@@ -37,13 +37,17 @@ public struct LoadConfiguration: Sendable {
     /// quantize weights
     public var quantize = false
 
+    /// LoRA adapters merged into the weights while loading (Lay X addition).
+    public var loras: LoRASet?
+
     public var dType: DType {
         float16 ? .float16 : .float32
     }
 
-    public init(float16: Bool = true, quantize: Bool = false) {
+    public init(float16: Bool = true, quantize: Bool = false, loras: LoRASet? = nil) {
         self.float16 = float16
         self.quantize = quantize
+        self.loras = loras
     }
 }
 
@@ -151,6 +155,44 @@ public struct StableDiffusionConfiguration: Sendable {
         try factory(client, self, configuration) as? ImageToImageGenerator
     }
 
+    /// Any SDXL checkpoint in diffusers layout (Lay X addition): per component, the fp16 file if present,
+    /// otherwise the full-precision one.
+    public static func sdxl(id: String, directory: URL, defaultSteps: Int = 30, defaultCFG: Float = 6) -> StableDiffusionConfiguration {
+        func pick(_ folder: String, _ base: String) -> String {
+            let fp16 = "\(folder)/\(base).fp16.safetensors"
+            return FileManager.default.fileExists(atPath: directory.appendingPathComponent(fp16).path) ? fp16 : "\(folder)/\(base).safetensors"
+        }
+        return StableDiffusionConfiguration(
+            id: id,
+            files: [
+                .unetConfig: "unet/config.json",
+                .unetWeights: pick("unet", "diffusion_pytorch_model"),
+                .textEncoderConfig: "text_encoder/config.json",
+                .textEncoderWeights: pick("text_encoder", "model"),
+                .textEncoderConfig2: "text_encoder_2/config.json",
+                .textEncoderWeights2: pick("text_encoder_2", "model"),
+                .vaeConfig: "vae/config.json",
+                .vaeWeights: pick("vae", "diffusion_pytorch_model"),
+                .diffusionConfig: "scheduler/scheduler_config.json",
+                .tokenizerVocabulary: "tokenizer/vocab.json",
+                .tokenizerMerges: "tokenizer/merges.txt",
+                .tokenizerVocabulary2: "tokenizer_2/vocab.json",
+                .tokenizerMerges2: "tokenizer_2/merges.txt",
+            ],
+            defaultParameters: { EvaluateParameters(cfgWeight: defaultCFG, steps: defaultSteps) },
+            factory: { client, sdConfiguration, loadConfiguration in
+                let sd = try StableDiffusionXL(
+                    client: client, configuration: sdConfiguration, dType: loadConfiguration.dType,
+                    loras: loadConfiguration.loras)
+                if loadConfiguration.quantize {
+                    quantize(model: sd.textEncoder, filter: { k, m in m is Linear })
+                    quantize(model: sd.textEncoder2, filter: { k, m in m is Linear })
+                    quantize(model: sd.unet, groupSize: 32, bits: 8)
+                }
+                return sd
+            })
+    }
+
     public enum Preset: String, Codable, CaseIterable, Sendable {
         case base
         case sdxlTurbo = "sdxl-turbo"
@@ -184,7 +226,8 @@ public struct StableDiffusionConfiguration: Sendable {
         defaultParameters: { EvaluateParameters(cfgWeight: 0, steps: 2) },
         factory: { client, sdConfiguration, loadConfiguration in
             let sd = try StableDiffusionXL(
-                client: client, configuration: sdConfiguration, dType: loadConfiguration.dType)
+                client: client, configuration: sdConfiguration, dType: loadConfiguration.dType,
+                loras: loadConfiguration.loras)
             if loadConfiguration.quantize {
                 quantize(model: sd.textEncoder, filter: { k, m in m is Linear })
                 quantize(model: sd.textEncoder2, filter: { k, m in m is Linear })
@@ -379,9 +422,12 @@ func vaeRemap(key: String, value: MLXArray) -> [(String, MLXArray)] {
 }
 
 func loadWeights(
-    url: URL, model: Module, mapper: (String, MLXArray) -> [(String, MLXArray)], dType: DType
+    url: URL, model: Module, mapper: (String, MLXArray) -> [(String, MLXArray)], dType: DType,
+    lora: (LoRASet, LoRAComponent)? = nil
 ) throws {
-    let weights = try loadArrays(url: url).flatMap { mapper($0.key, $0.value.asType(dType)) }
+    var arrays = try loadArrays(url: url)
+    if let (set, component) = lora { set.apply(to: &arrays, component: component) }
+    let weights = arrays.flatMap { mapper($0.key, $0.value.asType(dType)) }
 
     // Note: not using verifier because some shapes change upon load
     try model.update(parameters: ModuleParameters.unflattened(weights), verify: .none)
@@ -407,7 +453,8 @@ func loadConfiguration<T: Decodable>(
     return try JSONDecoder().decode(T.self, from: Data(contentsOf: url))
 }
 
-func loadUnet(client: ModelDirectory, configuration: StableDiffusionConfiguration, dType: DType) throws
+func loadUnet(client: ModelDirectory, configuration: StableDiffusionConfiguration, dType: DType,
+              loras: LoRASet? = nil) throws
     -> UNetModel
 {
     let unetConfiguration = try loadConfiguration(
@@ -416,14 +463,15 @@ func loadUnet(client: ModelDirectory, configuration: StableDiffusionConfiguratio
     let model = UNetModel(configuration: unetConfiguration)
 
     let weightsURL = try resolve(client: client, configuration: configuration, key: .unetWeights)
-    try loadWeights(url: weightsURL, model: model, mapper: unetRemap, dType: dType)
+    try loadWeights(url: weightsURL, model: model, mapper: unetRemap, dType: dType, lora: loras.map { ($0, .unet) })
 
     return model
 }
 
 func loadTextEncoder(
     client: ModelDirectory, configuration: StableDiffusionConfiguration,
-    configKey: FileKey = .textEncoderConfig, weightsKey: FileKey = .textEncoderWeights, dType: DType
+    configKey: FileKey = .textEncoderConfig, weightsKey: FileKey = .textEncoderWeights, dType: DType,
+    loras: LoRASet? = nil
 ) throws -> CLIPTextModel {
     let clipConfiguration = try loadConfiguration(
         client: client, configuration: configuration, key: configKey,
@@ -431,7 +479,8 @@ func loadTextEncoder(
     let model = CLIPTextModel(configuration: clipConfiguration)
 
     let weightsURL = try resolve(client: client, configuration: configuration, key: weightsKey)
-    try loadWeights(url: weightsURL, model: model, mapper: clipRemap, dType: dType)
+    try loadWeights(url: weightsURL, model: model, mapper: clipRemap, dType: dType,
+                    lora: loras.map { ($0, configKey == .textEncoderConfig2 ? .textEncoder2 : .textEncoder1) })
 
     return model
 }

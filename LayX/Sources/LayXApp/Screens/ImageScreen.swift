@@ -1,43 +1,50 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import LayXCore
 
 /// Image generation: prompt + settings on the left, the canvas in the middle, history on the right.
-/// Everything runs on this Mac; the model is downloaded once and then works offline.
+/// Everything runs on this Mac; models are downloaded once in Models and then work offline.
 struct ImageScreen: View {
+    @EnvironmentObject var state: AppState
+    @State private var pickerOpen = false
     private var studio: ImageStudio { AppServices.shared.images }
     private var library: ModelLibrary { AppServices.shared.models }
-    private var spec: ImageModelSpec { ImagePreferences.spec }
 
     var body: some View {
+        let spec = ImagePreferences.spec
         VStack(spacing: 0) {
             ScreenHeader {
-                Text("Image").font(LX.F.title)
-                ImageModelBadge(spec: spec)
+                ImageModelPicker(open: $pickerOpen, spec: spec)
             } trailing: {
                 HStack(spacing: 6) {
-                    if studio.isBusy {
-                        BusyIndicator(help: "Generating")
-                    }
+                    if studio.isBusy { BusyIndicator(help: "Generating") }
                     if let folder = studio.imagesFolder {
                         IconButton(symbol: "folder", help: "Show the images folder") {
                             NSWorkspace.shared.activateFileViewerSelecting([folder])
                         }
                     }
-                    if library.imageModel(spec) != nil { ImageModelMenu(spec: spec) }
                 }
             }
-            if library.imageModel(spec) == nil {
-                ImageModelDownloadCard(spec: spec)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            if let spec {
                 HStack(spacing: 0) {
-                    ImageComposer(spec: spec).frame(width: 320)
+                    ImageComposer(spec: spec).frame(width: 330).id(spec.id)
                     Rectangle().fill(LX.C.divider).frame(width: 1)
                     ImageCanvas().frame(maxWidth: .infinity)
                     Rectangle().fill(LX.C.divider).frame(width: 1)
                     ImageHistoryGrid().frame(width: 236)
                 }
+            } else {
+                NoImageModelCard().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if pickerOpen {
+                Color.black.opacity(0.001).ignoresSafeArea()
+                    .onTapGesture { withAnimation(LX.M.mini) { pickerOpen = false } }
+                ImageModelPanel(open: $pickerOpen, selected: spec)
+                    .padding(.leading, 14).padding(.top, 50)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topLeading)))
             }
         }
         .overlay(alignment: .bottom) {
@@ -51,113 +58,187 @@ struct ImageScreen: View {
             }
         }
         .animation(LX.M.panel, value: studio.notice)
-        .onAppear { library.refresh() }
+        .onAppear { library.refresh(); studio.refreshLoRAs() }
     }
 }
 
-// MARK: - Header
+// MARK: - Model picker (same look as Chat's, with a palette)
 
-struct ImageModelBadge: View {
-    let spec: ImageModelSpec
+struct ImageModelPicker: View {
+    @Binding var open: Bool
+    let spec: ImageModelSpec?
+    @State private var hover = false
     private var studio: ImageStudio { AppServices.shared.images }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: "paintpalette").font(.system(size: 11)).foregroundStyle(LX.C.primary)
-            Text(spec.name).font(LX.F.ui(12.5, .semibold)).foregroundStyle(LX.C.primary)
-            Text(verbatim: "\(spec.resolution)×\(spec.resolution)\(studio.loadedModelID == spec.id.description ? " · loaded" : "")")
-                .font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
+        Button { withAnimation(LX.M.mini) { open.toggle() } } label: {
+            HStack(spacing: 7) {
+                Group {
+                    if studio.phase == .loadingModel {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: "paintpalette").font(.system(size: 12)).foregroundStyle(LX.C.primary)
+                    }
+                }
+                .frame(width: 14, height: 14)
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Text(spec?.name ?? "No image model").font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary)
+                    Text(subtitle).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
+                }
+                .lineLimit(1).fixedSize()
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+                    .rotationEffect(.degrees(open ? 180 : 0))
+            }
+            .padding(.horizontal, 6).frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous).fill(Color.white.opacity(open ? 0.06 : (hover ? 0.04 : 0))))
+            .contentShape(Rectangle())
         }
-        .padding(.leading, 6)
-        .fixedSize()
+        .buttonStyle(PressScaleStyle())
+        .padding(.leading, -6)
+        .onHover { h in withAnimation(LX.M.hover) { hover = h } }
+        .help("Choose image model")
+    }
+
+    private var subtitle: String {
+        guard let spec else { return "Download one in Models" }
+        if studio.phase == .loadingModel { return "Loading…" }
+        let p = ImagePreferences.params(for: spec)
+        var parts = [spec.style, "\(p.width)×\(p.height)"]
+        if studio.loadedModelID != spec.id.description { parts.append("not loaded") }
+        return parts.joined(separator: " · ")
     }
 }
 
-/// ⋯ menu: unload, show in Finder, delete.
-struct ImageModelMenu: View {
-    let spec: ImageModelSpec
-    @State private var confirmDelete = false
+/// Floating list of installed image models (window corner radius, like Chat's panel).
+struct ImageModelPanel: View {
+    @Binding var open: Bool
+    let selected: ImageModelSpec?
+    @EnvironmentObject var state: AppState
     private var studio: ImageStudio { AppServices.shared.images }
     private var library: ModelLibrary { AppServices.shared.models }
 
     var body: some View {
-        Menu {
-            Button("Unload from Memory") { Task { await studio.unloadModel() } }
-                .disabled(studio.loadedModelID == nil || studio.isBusy)
-            if let m = library.imageModel(spec) {
-                Button("Show Model in Finder") { NSWorkspace.shared.activateFileViewerSelecting([m.directory]) }
-            }
-            Divider()
-            Button("Delete Model…", role: .destructive) { confirmDelete = true }
-                .disabled(studio.isBusy)
-        } label: {
-            Image(systemName: "ellipsis").font(.system(size: 13, weight: .semibold)).frame(width: 28, height: 28)
-        }
-        .menuStyle(.button).buttonStyle(QuietButtonStyle()).menuIndicator(.hidden).fixedSize()
-        .help("Image model")
-        .confirmationDialog("Delete \(spec.name)?", isPresented: $confirmDelete) {
-            Button("Delete \(ByteCountFormatter.string(fromByteCount: library.imageModel(spec)?.diskBytes ?? 0, countStyle: .file))",
-                   role: .destructive) {
-                Task {
-                    await studio.unloadModel()
-                    library.delete(spec.id, loadedID: nil)
+        VStack(alignment: .leading, spacing: 2) {
+            Text("IMAGE MODELS").font(LX.F.ui(9.5, .semibold)).kerning(0.8).foregroundStyle(LX.C.tertiary)
+                .padding(.horizontal, 10).padding(.top, 5).padding(.bottom, 3)
+            ForEach(library.imageModels) { m in
+                let spec = ImageModelSpec.spec(for: m.id)
+                let active = spec.id == selected?.id
+                PanelRow(selected: active) {
+                    ImagePreferences.select(m.id)
+                    withAnimation(LX.M.mini) { open = false }
+                } content: {
+                    HStack(spacing: 9) {
+                        Image(systemName: active ? "checkmark" : "paintpalette")
+                            .font(.system(size: active ? 11 : 12, weight: active ? .semibold : .regular))
+                            .foregroundStyle(active ? LX.C.accentText : LX.C.tertiary).frame(width: 18)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(spec.name).font(LX.F.ui(12.5, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
+                            Text("\(spec.style) · \(ModelDisplay.bytes(m.diskBytes))").font(LX.F.ui(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        if studio.loadedModelID == spec.id.description {
+                            Text("Loaded").font(LX.F.ui(10.5, .semibold)).foregroundStyle(LX.C.onGlass)
+                                .padding(.horizontal, 7).frame(height: 19)
+                                .accentGlass(radius: LX.R.xs, strength: 0.8)
+                        }
+                    }
+                    .padding(.horizontal, 9).frame(height: 42)
                 }
             }
-        } message: {
-            Text("The model files are removed from this Mac. Your generated images stay.")
+            if library.imageModels.isEmpty {
+                Text("No image models yet.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary).padding(.horizontal, 10).frame(height: 32)
+            }
+            Rectangle().fill(LX.C.divider).frame(height: 1).padding(.vertical, 3)
+            if studio.loadedModelID != nil {
+                PanelRow {
+                    Task { await studio.unloadModel() }
+                    withAnimation(LX.M.mini) { open = false }
+                } content: {
+                    Label("Unload from Memory", systemImage: "eject").font(LX.F.ui(12)).foregroundStyle(LX.C.body)
+                        .padding(.horizontal, 10).frame(height: 30)
+                }
+                .disabled(studio.isBusy)
+            }
+            PanelRow {
+                state.modelsKind = .image
+                state.modelsTab = library.imageModels.isEmpty ? .discover : .installed
+                state.screen = .models
+                withAnimation(LX.M.mini) { open = false }
+            } content: {
+                Label("Manage Models", systemImage: "shippingbox").font(LX.F.ui(12)).foregroundStyle(LX.C.body)
+                    .padding(.horizontal, 10).frame(height: 30)
+            }
         }
+        .padding(5)
+        .frame(width: 300)
+        .background {
+            ZStack {
+                VisualEffectBlur(material: .hudWindow, blending: .withinWindow)
+                LX.C.overlay.opacity(0.75)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: LX.R.window, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: LX.R.window, style: .continuous).strokeBorder(LX.C.edge, lineWidth: 1))
+        .shadow(color: .black.opacity(0.45), radius: 28, y: 18)
+        .background { Button("") { withAnimation(LX.M.mini) { open = false } }.keyboardShortcut(.escape, modifiers: []).opacity(0) }
     }
 }
 
-// MARK: - Download
+/// Full-width hoverable row for floating panels.
+struct PanelRow<Content: View>: View {
+    var selected = false
+    let action: () -> Void
+    @ViewBuilder let content: () -> Content
+    @State private var hover = false
 
-struct ImageModelDownloadCard: View {
-    let spec: ImageModelSpec
+    var body: some View {
+        Button(action: action) {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: LX.R.md, style: .continuous)
+                    .fill(selected ? LX.C.accent.opacity(hover ? 0.16 : 0.12) : Color.white.opacity(hover ? 0.06 : 0)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleStyle())
+        .onHover { h in withAnimation(LX.M.hover) { hover = h } }
+    }
+}
+
+/// Shown when no image model is installed: points to Models (downloads live there).
+struct NoImageModelCard: View {
+    @EnvironmentObject var state: AppState
     private var library: ModelLibrary { AppServices.shared.models }
 
     var body: some View {
-        let state = library.downloads[spec.id]
+        let pick = ImageModelSpec.dreamShaperTurbo
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("IMAGE · ON-DEVICE").font(LX.F.mono(11)).kerning(0.9).foregroundStyle(LX.C.accent)
-                Text("Paint with \(spec.name)").font(LX.F.display).kerning(-0.4)
-                Text("Download the model once (about \(ByteCountFormatter.string(fromByteCount: spec.downloadBytes, countStyle: .file))). After that, images are generated entirely on this Mac — offline, no account, nothing uploaded.")
+                Text("Paint on this Mac").font(LX.F.display).kerning(-0.4)
+                Text("Download an image model once in Models. After that, images are generated entirely on this Mac — offline, no account, nothing uploaded.")
                     .font(LX.F.body).foregroundStyle(LX.C.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            VStack(alignment: .leading, spacing: 6) {
-                fact("bolt", "\(spec.resolution)×\(spec.resolution) in 1–4 steps — usually a second or two")
-                fact("memory", String(format: "Needs about %.0f GB of free memory while generating", Double(spec.runtimeBytes) / 1_073_741_824))
-                fact("doc.text", "\(spec.publisher) · \(spec.license)")
-            }
-            switch state {
-            case .active(let p)?:
-                VStack(alignment: .leading, spacing: 8) {
+            if case .active(let p)? = library.downloads[pick.id] {
+                VStack(alignment: .leading, spacing: 6) {
                     ProgressView(value: p.fraction).tint(LX.C.accent)
-                    HStack {
-                        Text("\(p.phase.rawValue.capitalized) · \(ByteCountFormatter.string(fromByteCount: p.receivedBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: p.totalBytes, countStyle: .file))")
-                            .font(LX.F.mono(11)).foregroundStyle(LX.C.secondary)
-                        Spacer()
-                        LXButton(title: "Cancel", kind: .secondary) { library.cancelDownload(spec.id) }
+                    Text("Downloading \(pick.name) · \(ModelDisplay.bytes(p.receivedBytes)) of \(ModelDisplay.bytes(p.totalBytes))")
+                        .font(LX.F.mono(11)).foregroundStyle(LX.C.secondary)
+                }
+            } else {
+                HStack(spacing: 10) {
+                    LXButton(title: "Download \(pick.name) (\(ModelDisplay.bytes(pick.downloadBytes)))", symbol: "arrow.down.circle", kind: .primary) {
+                        library.download(pick.id)
+                    }
+                    LXButton(title: "Browse image models") {
+                        state.modelsKind = .image
+                        state.modelsTab = .discover
+                        state.screen = .models
                     }
                 }
-            default:
-                HStack(spacing: 10) {
-                    LXButton(title: "Download \(spec.name)", symbol: "arrow.down.circle", kind: .primary) { library.download(spec.id) }
-                    Link("License", destination: spec.licenseURL).font(LX.F.ui(12)).foregroundStyle(LX.C.accentText)
-                }
-                if case .failed(let message)? = state {
-                    Text(message).font(LX.F.caption).foregroundStyle(LX.C.error)
-                }
             }
         }
-        .frame(width: 520)
-    }
-
-    private func fact(_ symbol: String, _ text: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: symbol).font(.system(size: 11)).foregroundStyle(LX.C.accentText).frame(width: 16)
-            Text(text).font(LX.F.ui(12.5)).foregroundStyle(LX.C.body)
-        }
+        .frame(width: 540)
     }
 }
 
@@ -165,55 +246,147 @@ struct ImageModelDownloadCard: View {
 
 struct ImageComposer: View {
     let spec: ImageModelSpec
-    @AppStorage(ImagePreferences.stepsKey) private var steps = 2
     @AppStorage(ImagePreferences.countKey) private var count = 1
+    @State private var params: ImagePreferences.Params
+    @State private var showNegative = false
+    @State private var showLoRAs = false
     @FocusState private var focused: Bool
     private var studio: ImageStudio { AppServices.shared.images }
 
+    init(spec: ImageModelSpec) {
+        self.spec = spec
+        _params = State(initialValue: ImagePreferences.params(for: spec))
+    }
+
     var body: some View {
         @Bindable var studio = studio
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionLabel(text: "Prompt")
-                VStack(spacing: 0) {
-                    TextField("A cozy reading nook with a sleeping cat, warm light, watercolor", text: $studio.draftPrompt, axis: .vertical)
-                        .textFieldStyle(.plain).font(LX.F.bodyLarge).lineLimit(5...10)
-                        .focused($focused)
-                        .onKeyPress(.return, phases: .down) { press in
-                            guard press.modifiers.contains(.shift) else { return .ignored }
-                            studio.draftPrompt += "\n"
-                            return .handled
+        ScrollView {
+            VStack(alignment: .leading, spacing: 15) {
+                promptBox
+                negativeSection
+                setting("Size", params.size.aspect) {
+                    Menu {
+                        ForEach(spec.sizes) { size in
+                            Button {
+                                params.width = size.width; params.height = size.height
+                            } label: {
+                                Text("\(size.label) · \(size.aspect)\(size == spec.defaultSize ? " (recommended)" : "")")
+                            }
                         }
-                        .onSubmit { generate() }
-                        .padding(12)
+                    } label: {
+                        HStack(spacing: 8) {
+                            AspectGlyph(size: params.size)
+                            Text(params.size.label).font(LX.F.mono(12)).foregroundStyle(LX.C.primary)
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+                        }
+                        .padding(.horizontal, 10).frame(height: LX.S.control)
+                        .well(radius: LX.R.md, fill: Color.black.opacity(0.28))
+                        .contentShape(Rectangle())
+                    }
+                    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
                 }
-                .background {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: LX.R.xl).fill(.ultraThinMaterial)
-                        RoundedRectangle(cornerRadius: LX.R.xl).fill(Color(hex: 0x080910, alpha: 0.6))
+                setting("Steps", "\(params.steps)") {
+                    CompactSlider(value: Binding(get: { Double(params.steps) }, set: { params.steps = Int($0.rounded()) }),
+                                  range: Double(spec.stepRange.lowerBound)...Double(spec.stepRange.upperBound),
+                                  marker: Double(spec.defaultSteps))
+                }
+                setting("Guidance (CFG)", params.cfg <= 1 ? "Off" : String(format: "%.1f", params.cfg)) {
+                    CompactSlider(value: Binding(get: { params.cfg }, set: { params.cfg = ($0 * 2).rounded() / 2 }),
+                                  range: spec.cfgRange, marker: spec.defaultCFG)
+                }
+                setting("Images", count > 1 ? "seed, seed+1, …" : "") {
+                    Segmented(options: [(1, "1"), (2, "2"), (4, "4")], selection: $count, mono: true)
+                }
+                setting("Seed", "same seed = same image") {
+                    HStack(spacing: 6) {
+                        LXField(placeholder: "Random", text: $studio.draftSeed, mono: true)
+                        IconButton(symbol: "dice", help: "Pick a seed") { studio.draftSeed = String(ImageRequest.randomSeed()) }
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: LX.R.xl))
-                .overlay(RoundedRectangle(cornerRadius: LX.R.xl).strokeBorder(Color.white.opacity(focused ? 0.16 : 0.09), lineWidth: 1))
-                .overlay { if studio.isBusy { GlowingBorder(radius: LX.R.xl).transition(.opacity) } }
-                .animation(.easeInOut(duration: 0.3), value: studio.isBusy)
-            }
-
-            setting("Steps", "More steps add detail; 1–2 is usually enough") {
-                Segmented(options: spec.stepChoices.map { ($0, "\($0)") }, selection: $steps, mono: true)
-            }
-            setting("Images", "Each image uses the next seed") {
-                Segmented(options: [(1, "1"), (2, "2"), (4, "4")], selection: $count, mono: true)
-            }
-            setting("Seed", "Same prompt + seed = same image") {
-                HStack(spacing: 6) {
-                    LXField(placeholder: "Random", text: $studio.draftSeed, mono: true).frame(width: 150)
-                    IconButton(symbol: "dice", help: "Pick a seed") { studio.draftSeed = String(ImageRequest.randomSeed()) }
+                loraSection
+                if params != .defaults(spec) {
+                    Button("Reset to \(spec.name) defaults") { params = .defaults(spec) }
+                        .buttonStyle(.plain).font(LX.F.caption).foregroundStyle(LX.C.accentText)
                 }
             }
+            .padding(16)
+        }
+        .scrollIndicators(.hidden)
+        .safeAreaInset(edge: .bottom) { generateBar }
+        .onAppear { focused = true }
+        .onChange(of: params) { _, p in ImagePreferences.setParams(p, for: spec) }
+        .onChange(of: studio.activeLoRAs) { _, l in ImagePreferences.activeLoRAs = l }
+    }
 
-            Spacer(minLength: 0)
+    private var promptBox: some View {
+        @Bindable var studio = studio
+        return VStack(spacing: 0) {
+            TextField("A cozy reading nook with a sleeping cat, warm light, watercolor", text: $studio.draftPrompt, axis: .vertical)
+                .textFieldStyle(.plain).font(LX.F.bodyLarge).lineLimit(4...10)
+                .focused($focused)
+                .onKeyPress(.return, phases: .down) { press in
+                    guard press.modifiers.contains(.shift) else { return .ignored }
+                    studio.draftPrompt += "\n"
+                    return .handled
+                }
+                .onSubmit { generate() }
+                .padding(12)
+        }
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: LX.R.xl).fill(.ultraThinMaterial)
+                RoundedRectangle(cornerRadius: LX.R.xl).fill(Color(hex: 0x080910, alpha: 0.6))
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: LX.R.xl))
+        .overlay(RoundedRectangle(cornerRadius: LX.R.xl).strokeBorder(Color.white.opacity(focused ? 0.16 : 0.09), lineWidth: 1))
+        .overlay { if studio.isBusy { GlowingBorder(radius: LX.R.xl).transition(.opacity) } }
+        .animation(.easeInOut(duration: 0.3), value: studio.isBusy)
+    }
 
+    private var negativeSection: some View {
+        @Bindable var studio = studio
+        return VStack(alignment: .leading, spacing: 8) {
+            DisclosureHeader(title: "Negative prompt", open: $showNegative,
+                             badge: studio.draftNegative.isEmpty ? nil : (params.cfg > 1 ? "on" : "needs CFG > 1"))
+            if showNegative {
+                TextField("blurry, low quality, extra fingers, watermark", text: $studio.draftNegative, axis: .vertical)
+                    .textFieldStyle(.plain).font(LX.F.body).lineLimit(2...5)
+                    .padding(10)
+                    .well(radius: LX.R.lg, fill: Color.black.opacity(0.28))
+                if params.cfg <= 1 {
+                    Text("Used only when Guidance (CFG) is above 1.").font(LX.F.caption).foregroundStyle(LX.C.tertiary)
+                }
+            }
+        }
+    }
+
+    private var loraSection: some View {
+        @Bindable var studio = studio
+        let active = studio.activeLoRAs.filter { $0.scale != 0 }.count
+        return VStack(alignment: .leading, spacing: 8) {
+            DisclosureHeader(title: "LoRA", open: $showLoRAs, badge: active > 0 ? "\(active) on" : nil)
+            if showLoRAs {
+                ForEach(studio.loraLibrary) { info in
+                    LoRARow(info: info)
+                }
+                if studio.loraLibrary.isEmpty {
+                    Text("Add SDXL LoRA files (.safetensors) to change the style or teach a subject.")
+                        .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 6) {
+                    LXButton(title: "Add LoRA…", symbol: "plus") { addLoRA() }
+                    if let folder = studio.loraFolder {
+                        IconButton(symbol: "folder", help: "Show the LoRA folder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
+                    }
+                }
+            }
+        }
+    }
+
+    private var generateBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
             if studio.isBusy {
                 LiveStatusText(text: statusText, font: LX.F.mono(11))
             }
@@ -236,38 +409,172 @@ struct ImageComposer: View {
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(studio.draftPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            Text("On this Mac · \(spec.name) · \(spec.license)")
-                .font(LX.F.caption).foregroundStyle(LX.C.tertiary)
         }
-        .padding(16)
-        .onAppear { focused = true }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(Color.black.opacity(0.12))
+        .overlay(alignment: .top) { Rectangle().fill(LX.C.divider).frame(height: 1) }
     }
 
     private var statusText: String {
         switch studio.phase {
         case .idle: ""
         case .freeingMemory: "Making room in memory…"
-        case .loadingModel: "Loading \(spec.name)…"
+        case .loadingModel: studio.activeLoRAs.contains(where: { $0.scale != 0 }) ? "Loading \(spec.name) + LoRA…" : "Loading \(spec.name)…"
         case .waiting: "Waiting for the GPU…"
         case .generating(let i, let n, let step, let total):
             (n > 1 ? "Image \(i + 1) of \(n) · " : "") + (step == 0 ? "Reading the prompt…" : "Painting · step \(step) of \(total)")
         }
     }
 
-    private func setting<C: View>(_ title: String, _ hint: String, @ViewBuilder _ content: () -> C) -> some View {
+    private func setting<C: View>(_ title: String, _ value: String, @ViewBuilder _ content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title).font(LX.F.ui(12.5, .semibold)).foregroundStyle(LX.C.secondary)
                 Spacer()
-                Text(hint).font(LX.F.caption).foregroundStyle(LX.C.tertiary).lineLimit(1)
+                Text(value).font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary).lineLimit(1)
             }
             content()
         }
     }
 
+    private func addLoRA() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "safetensors") ?? .data]
+        panel.allowsMultipleSelection = true
+        panel.message = "Choose SDXL LoRA files (.safetensors). They are copied into Lay X."
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls { studio.importLoRA(url) }
+        showLoRAs = true
+    }
+
     private func generate() {
         let seed = UInt64(studio.draftSeed.trimmingCharacters(in: .whitespaces)) ?? ImageRequest.randomSeed()
-        studio.generate(ImageRequest(prompt: studio.draftPrompt, steps: steps, seed: seed, count: count), spec: spec)
+        studio.generate(ImageRequest(prompt: studio.draftPrompt, negativePrompt: studio.draftNegative, steps: params.steps,
+                                     cfg: params.cfg, seed: seed, count: count, size: params.size,
+                                     loras: studio.activeLoRAs.filter { $0.scale != 0 }), spec: spec)
+    }
+}
+
+/// Small rectangle showing the aspect ratio.
+struct AspectGlyph: View {
+    let size: ImageSize
+    var body: some View {
+        let w = size.width >= size.height ? 16.0 : 16.0 * Double(size.width) / Double(size.height)
+        let h = size.height >= size.width ? 16.0 : 16.0 * Double(size.height) / Double(size.width)
+        RoundedRectangle(cornerRadius: 2).strokeBorder(LX.C.accentText, lineWidth: 1.2)
+            .frame(width: w, height: h).frame(width: 18, height: 18)
+    }
+}
+
+/// "▸ Title  badge" toggle for collapsible sections.
+struct DisclosureHeader: View {
+    let title: String
+    @Binding var open: Bool
+    var badge: String?
+
+    var body: some View {
+        Button { withAnimation(LX.M.hover) { open.toggle() } } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
+                    .rotationEffect(.degrees(open ? 90 : 0))
+                Text(title).font(LX.F.ui(12.5, .semibold))
+                if let badge {
+                    Text(badge).font(LX.F.mono(10)).foregroundStyle(LX.C.accentText)
+                        .padding(.horizontal, 6).frame(height: 17)
+                        .background(Capsule().fill(LX.C.accent.opacity(0.14)))
+                }
+                Spacer()
+            }
+            .foregroundStyle(LX.C.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Slider sized for the composer: gradient track, knob, faint marker at the model's recommended value.
+struct CompactSlider: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var marker: Double?
+
+    var body: some View {
+        GeometryReader { geo in
+            let span = max(range.upperBound - range.lowerBound, 0.0001)
+            let pct = (min(max(value, range.lowerBound), range.upperBound) - range.lowerBound) / span
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.10)).frame(height: 4)
+                Capsule().fill(LX.C.liveGradient).frame(width: max(4, geo.size.width * pct), height: 4)
+                if let marker {
+                    Circle().fill(Color.white.opacity(0.35)).frame(width: 4, height: 4)
+                        .offset(x: geo.size.width * (marker - range.lowerBound) / span - 2)
+                }
+                Circle().fill(.white).frame(width: 14, height: 14)
+                    .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
+                    .offset(x: geo.size.width * pct - 7)
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { g in
+                let p = min(max(0, g.location.x / geo.size.width), 1)
+                value = range.lowerBound + p * span
+            })
+        }
+        .frame(height: 18)
+        .padding(.horizontal, 7)
+        .accessibilityElement()
+        .accessibilityValue(String(format: "%.1f", value))
+        .accessibilityAdjustableAction { dir in
+            let step = (range.upperBound - range.lowerBound) / 20
+            value = min(range.upperBound, max(range.lowerBound, value + (dir == .increment ? step : -step)))
+        }
+    }
+}
+
+/// One LoRA: on/off, strength, fit warning, trigger words.
+struct LoRARow: View {
+    let info: LoRALibrary.Info
+    private var studio: ImageStudio { AppServices.shared.images }
+
+    var body: some View {
+        let index = studio.activeLoRAs.firstIndex { $0.file == info.file }
+        let on = index != nil
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Checkbox(isOn: Binding(get: { on }, set: { new in
+                    if new { studio.activeLoRAs.append(LoRAChoice(file: info.file, scale: 1)) }
+                    else { studio.activeLoRAs.removeAll { $0.file == info.file } }
+                }))
+                Text(info.name).font(LX.F.ui(12.5, .medium)).foregroundStyle(LX.C.primary).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                if case .otherBase(let base) = info.fit {
+                    Image(systemName: "exclamationmark.triangle").font(.system(size: 10)).foregroundStyle(LX.C.warn)
+                        .help("Made for \(base) — it won’t apply to SDXL models")
+                }
+                Menu {
+                    Button("Delete LoRA", role: .destructive) { studio.deleteLoRA(info.file) }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+                        .frame(width: 20, height: 20).contentShape(Rectangle())
+                }
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+            }
+            if let index {
+                HStack(spacing: 8) {
+                    CompactSlider(value: Binding(get: { studio.activeLoRAs[index].scale },
+                                                 set: { studio.activeLoRAs[index].scale = ($0 * 20).rounded() / 20 }),
+                                  range: 0...1.5, marker: 1)
+                    Text(String(format: "%.2f", studio.activeLoRAs[index].scale)).font(LX.F.mono(11)).foregroundStyle(LX.C.secondary)
+                        .frame(width: 34, alignment: .trailing)
+                }
+                if !info.triggerWords.isEmpty {
+                    Text("Trigger: \(info.triggerWords.joined(separator: ", "))").font(LX.F.caption).foregroundStyle(LX.C.tertiary)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+            }
+        }
+        .padding(10)
+        .well(radius: LX.R.lg, fill: Color.black.opacity(0.2))
     }
 }
 
@@ -340,19 +647,29 @@ struct ImageDetailBar: View {
     @State private var copied = false
     private var studio: ImageStudio { AppServices.shared.images }
 
+    private var detailLine: String {
+        var parts = [ImageModelSpec.spec(for: ModelRepoID(record.modelID) ?? ImageModelSpec.sdxlTurbo.id).name,
+                     "\(record.width)×\(record.height)", "\(record.steps) step\(record.steps == 1 ? "" : "s")"]
+        if record.cfg > 1 { parts.append(String(format: "CFG %.1f", record.cfg)) }
+        parts.append("seed \(record.seed)")
+        if !record.loras.isEmpty { parts.append(record.loras) }
+        parts.append(String(format: "%.1f s", record.duration))
+        return parts.joined(separator: " · ")
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(record.prompt).font(LX.F.body).foregroundStyle(LX.C.body).lineLimit(2).textSelection(.enabled)
-                Text(verbatim: "seed \(record.seed) · \(record.steps) step\(record.steps == 1 ? "" : "s") · \(record.width)×\(record.height) · \(String(format: "%.1f s", record.duration))")
+                Text(verbatim: detailLine)
                     .font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
             }
             Spacer(minLength: 8)
             HStack(spacing: 2) {
-                IconButton(symbol: "arrow.uturn.backward", help: "Reuse prompt and seed") {
+                IconButton(symbol: "arrow.uturn.backward", help: "Reuse prompt, negative prompt and seed") {
                     studio.draftPrompt = record.prompt
+                    studio.draftNegative = record.negativePrompt
                     studio.draftSeed = String(record.seed)
-                    UserDefaults.standard.set(record.steps, forKey: ImagePreferences.stepsKey)
                 }
                 IconButton(symbol: copied ? "checkmark" : "doc.on.doc", help: "Copy image") {
                     ImageActions.copy(record)

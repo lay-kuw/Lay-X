@@ -216,16 +216,16 @@ open class StableDiffusion {
         client: ModelDirectory, configuration: StableDiffusionConfiguration, dType: DType,
         diffusionConfiguration: DiffusionConfiguration? = nil, unet: UNetModel? = nil,
         textEncoder: CLIPTextModel? = nil, autoencoder: Autoencoder? = nil,
-        sampler: SimpleEulerSampler? = nil, tokenizer: CLIPTokenizer? = nil
+        sampler: SimpleEulerSampler? = nil, tokenizer: CLIPTokenizer? = nil, loras: LoRASet? = nil
     ) throws {
         self.dType = dType
         self.diffusionConfiguration =
             try diffusionConfiguration
             ?? loadDiffusionConfiguration(client: client, configuration: configuration)
-        self.unet = try unet ?? loadUnet(client: client, configuration: configuration, dType: dType)
+        self.unet = try unet ?? loadUnet(client: client, configuration: configuration, dType: dType, loras: loras)
         self.textEncoder =
             try textEncoder
-            ?? loadTextEncoder(client: client, configuration: configuration, dType: dType)
+            ?? loadTextEncoder(client: client, configuration: configuration, dType: dType, loras: loras)
 
         // note: autoencoder uses float32 weights
         self.autoencoder =
@@ -347,7 +347,8 @@ open class StableDiffusionXL: StableDiffusion, TextToImageGenerator, ImageToImag
     let textEncoder2: CLIPTextModel
     let tokenizer2: CLIPTokenizer
 
-    public init(client: ModelDirectory, configuration: StableDiffusionConfiguration, dType: DType) throws
+    public init(client: ModelDirectory, configuration: StableDiffusionConfiguration, dType: DType,
+                loras: LoRASet? = nil) throws
     {
         let diffusionConfiguration = try loadConfiguration(
             client: client, configuration: configuration, key: .diffusionConfig,
@@ -356,7 +357,7 @@ open class StableDiffusionXL: StableDiffusion, TextToImageGenerator, ImageToImag
 
         self.textEncoder2 = try loadTextEncoder(
             client: client, configuration: configuration, configKey: .textEncoderConfig2,
-            weightsKey: .textEncoderWeights2, dType: dType)
+            weightsKey: .textEncoderWeights2, dType: dType, loras: loras)
 
         self.tokenizer2 = try loadTokenizer(
             client: client, configuration: configuration, vocabulary: .tokenizerVocabulary2,
@@ -364,12 +365,18 @@ open class StableDiffusionXL: StableDiffusion, TextToImageGenerator, ImageToImag
 
         try super.init(
             client: client, configuration: configuration, dType: dType,
-            diffusionConfiguration: diffusionConfiguration, sampler: sampler)
+            diffusionConfiguration: diffusionConfiguration, sampler: sampler, loras: loras)
     }
 
     open override func ensureLoaded() {
         super.ensureLoaded()
         eval(textEncoder2)
+    }
+
+    /// SDXL micro-conditioning: original size (h, w), crop (0, 0), target size (h, w). (Lay X: was fixed at 512.)
+    static func sizeConditioning(_ latentSize: [Int]) -> [Double] {
+        let h = Double(latentSize[0] * 8), w = Double(latentSize[1] * 8)
+        return [h, w, 0, 0, h, w]
     }
 
     func conditionText(text: String, imageCount: Int, cfgWeight: Float, negativeText: String?) -> (
@@ -408,7 +415,7 @@ open class StableDiffusionXL: StableDiffusion, TextToImageGenerator, ImageToImag
         let textTime = (
             pooledConditioning,
             repeated(
-                MLXArray(converting: [512.0, 512, 0, 0, 512, 512]).reshaped(1, -1),
+                MLXArray(converting: Self.sizeConditioning(parameters.latentSize)).reshaped(1, -1),
                 count: pooledConditioning.count, axis: 0)
         )
 
@@ -437,7 +444,7 @@ open class StableDiffusionXL: StableDiffusion, TextToImageGenerator, ImageToImag
         let textTime = (
             pooledConditioning,
             repeated(
-                MLXArray(converting: [512.0, 512, 0, 0, 512, 512]).reshaped(1, -1),
+                MLXArray(converting: Self.sizeConditioning(parameters.latentSize)).reshaped(1, -1),
                 count: pooledConditioning.count, axis: 0)
         )
 

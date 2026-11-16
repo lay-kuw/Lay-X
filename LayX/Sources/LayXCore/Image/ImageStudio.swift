@@ -25,6 +25,12 @@ public final class ImageStudio {
     public private(set) var phase: Phase = .idle
     public private(set) var history: [ImageRecord] = []
     public private(set) var loadedModelID: String?
+    /// LoRAs merged into the loaded model.
+    public private(set) var loadedLoRAs: [LoRAChoice] = []
+    /// LoRAs in the library (refreshed on import / delete).
+    public private(set) var loraLibrary: [LoRALibrary.Info] = []
+    /// LoRAs switched on in the composer, with their strengths.
+    public var activeLoRAs: [LoRAChoice] = []
     public var selectedID: UUID?
     public private(set) var error: String?
     public private(set) var notice: String?
@@ -35,10 +41,12 @@ public final class ImageStudio {
     public var draftPrompt = ""
     /// Fixed seed text ("" = random each time).
     public var draftSeed = ""
+    public var draftNegative = ""
 
     @ObservationIgnored private let engine: any ImageEngine
     @ObservationIgnored private let coordinator: InferenceCoordinator
     @ObservationIgnored private var store: ImageHistoryStore?
+    @ObservationIgnored private let loras: LoRALibrary?
     @ObservationIgnored private let modelDirectory: @MainActor (ImageModelSpec) -> URL?
     @ObservationIgnored private let availableMemory: @Sendable () -> Int64
     @ObservationIgnored private let allowUnloadingTextModel: @MainActor () -> Bool
@@ -48,6 +56,7 @@ public final class ImageStudio {
     @ObservationIgnored private var generationCounter = 0
 
     public init(engine: any ImageEngine, coordinator: InferenceCoordinator, store: ImageHistoryStore?,
+                loras: LoRALibrary? = nil,
                 modelDirectory: @escaping @MainActor (ImageModelSpec) -> URL?,
                 availableMemory: @escaping @Sendable () -> Int64,
                 allowUnloadingTextModel: @escaping @MainActor () -> Bool = { true },
@@ -55,10 +64,12 @@ public final class ImageStudio {
         self.engine = engine
         self.coordinator = coordinator
         self.store = store
+        self.loras = loras
         self.modelDirectory = modelDirectory
         self.availableMemory = availableMemory
         self.allowUnloadingTextModel = allowUnloadingTextModel
         self.keepLoaded = keepLoaded
+        refreshLoRAs()
     }
 
     public var imagesFolder: URL? { store?.folder }
@@ -87,9 +98,11 @@ public final class ImageStudio {
         guard !prompt.isEmpty, !isBusy else { return }
         var req = request
         req.prompt = prompt
-        req.steps = min(max(req.steps, 1), spec.stepChoices.max() ?? 4)
+        req.steps = min(max(req.steps, 1), 100)
         req.count = min(max(req.count, 1), 4)
-        req.size = spec.resolution
+        req.cfg = min(max(req.cfg, 0), 20)
+        req.size = ImageSize(min(max(req.size.width / 64 * 64, 256), 2048), min(max(req.size.height / 64 * 64, 256), 2048))
+        req.loras = req.loras.filter { $0.scale != 0 && loras?.url(for: $0.file) != nil }
         error = nil
         notice = nil
         idleTask?.cancel()
@@ -106,7 +119,7 @@ public final class ImageStudio {
             scheduleIdleUnload()
         }
         do {
-            try await ensureLoaded(spec)
+            try await ensureLoaded(spec, loras: request.loras, size: request.size)
             phase = .waiting
             let clock = ContinuousClock()
             let start = clock.now
@@ -138,8 +151,10 @@ public final class ImageStudio {
             }
             do {
                 let record = try await store.save(
-                    png: png, prompt: request.prompt, negativePrompt: request.negativePrompt, modelID: spec.id.description,
-                    seed: seed, steps: request.steps, size: request.size, duration: elapsed / Double(index + 1), index: index)
+                    png: png, prompt: request.prompt, negativePrompt: request.cfg > 1 ? request.negativePrompt : "",
+                    modelID: spec.id.description, seed: seed, steps: request.steps, cfg: request.cfg, size: request.size,
+                    loras: request.loras.map { "\($0.displayName) ×\(String(format: "%.2g", $0.scale))" }.joined(separator: ", "),
+                    duration: elapsed / Double(index + 1), index: index)
                 history.insert(record, at: 0)
                 selectedID = record.id
             } catch {
@@ -150,21 +165,32 @@ public final class ImageStudio {
 
     // MARK: Model & memory
 
-    private func ensureLoaded(_ spec: ImageModelSpec) async throws {
-        if loadedModelID == spec.id.description { return }
+    private func ensureLoaded(_ spec: ImageModelSpec, loras choices: [LoRAChoice], size: ImageSize) async throws {
+        let total = spec.runtimeBytes(for: size)
+        if loadedModelID == spec.id.description, loadedLoRAs == choices {
+            // Loaded: only the activations for this size must fit.
+            try await makeRoom(need: total - ImageModelSpec.weightBytes)
+            return
+        }
         guard let directory = modelDirectory(spec) else {
             throw ImageEngineError.loadFailed("\(spec.name) isn’t downloaded yet")
         }
-        if loadedModelID != nil { await engine.unload(); loadedModelID = nil }
-        try await makeRoom(for: spec)
+        if loadedModelID != nil { await engine.unload(); loadedModelID = nil; loadedLoRAs = [] }
+        try await makeRoom(need: total)
         phase = .loadingModel
         try Task.checkCancellation()
-        try await engine.load(spec, directory: directory)
+        let files = choices.compactMap { c in loras?.url(for: c.file).map { LoRAFile(url: $0, scale: c.scale) } }
+        let report = try await engine.load(spec, directory: directory, loras: files)
         loadedModelID = spec.id.description
+        loadedLoRAs = choices
+        if !files.isEmpty {
+            notice = report.appliedLayers == 0
+                ? "The LoRA didn’t match \(spec.name) — is it made for SDXL?"
+                : "LoRA applied to \(report.appliedLayers) layers\(report.skippedLayers > 0 ? " (\(report.skippedLayers) skipped)" : "")."
+        }
     }
 
-    private func makeRoom(for spec: ImageModelSpec) async throws {
-        let need = spec.runtimeBytes
+    private func makeRoom(need: Int64) async throws {
         var available = availableMemory()
         guard available < need else { return }
         phase = .freeingMemory
@@ -202,7 +228,40 @@ public final class ImageStudio {
         guard loadedModelID != nil, !isBusy else { return }
         await engine.unload()
         loadedModelID = nil
+        loadedLoRAs = []
     }
+
+    // MARK: LoRA
+
+    public func refreshLoRAs() {
+        loraLibrary = loras?.list() ?? []
+        let known = Set(loraLibrary.map(\.file))
+        activeLoRAs.removeAll { !known.contains($0.file) }
+    }
+
+    public func importLoRA(_ url: URL) {
+        guard let loras else { error = "LoRAs can’t be stored: the LoRA folder isn’t available."; return }
+        do {
+            let info = try loras.importFile(url)
+            refreshLoRAs()
+            switch info.fit {
+            case .sdxl, .unknown:
+                notice = "Added \(info.name)."
+                if !activeLoRAs.contains(where: { $0.file == info.file }) { activeLoRAs.append(LoRAChoice(file: info.file, scale: 1)) }
+            case .otherBase(let base):
+                notice = "Added \(info.name), but it was made for \(base) — it won’t apply to SDXL models."
+            }
+        } catch {
+            self.error = (error as? LocalizedError)?.errorDescription ?? "The LoRA couldn’t be added."
+        }
+    }
+
+    public func deleteLoRA(_ file: String) {
+        try? loras?.delete(file)
+        refreshLoRAs()
+    }
+
+    public var loraFolder: URL? { loras?.folder }
 
     private func scheduleIdleUnload() {
         idleTask?.cancel()

@@ -136,12 +136,19 @@ public actor ModelDownloader {
                 throw ModelStoreError.incompatible("architecture “\(type)” is not supported by the MLX engine")
             }
             modelType = type
-        case .image(let type, let wanted):
-            // Exactly the files the image pipeline loads (repositories also hold other formats and precisions).
-            files = all.filter { wanted.contains($0.path) }
-            let missing = Set(wanted).subtracting(files.map(\.path))
-            guard missing.isEmpty else { throw ModelStoreError.incompatible("missing \(missing.sorted().joined(separator: ", "))") }
-            modelType = type
+        case .sdxl:
+            // Exactly the files the SDXL pipeline loads (repositories also hold other formats and precisions).
+            let picked = SDXLFiles.select(from: all)
+            guard let chosen = picked.files else {
+                throw ModelStoreError.incompatible("not an SDXL pipeline in diffusers format (missing \(picked.missing.prefix(3).joined(separator: ", ")))")
+            }
+            let index = try await hub.smallFile("model_index.json", of: id, revision: revision)
+            let className = (try? JSONSerialization.jsonObject(with: index) as? [String: Any])?["_class_name"] as? String
+            guard className == "StableDiffusionXLPipeline" else {
+                throw ModelStoreError.incompatible("\(className ?? "this pipeline") isn’t supported — Lay X runs SDXL models")
+            }
+            files = chosen
+            modelType = "sdxl"
         }
         try Task.checkCancellation()
 
@@ -286,8 +293,8 @@ final class ProgressMeter: Sendable {
 public enum DownloadProfile: Sendable, Hashable {
     /// MLX language model: weights + configs + tokenizer, architecture checked against the engine.
     case languageModel
-    /// Image model: exactly `files` (repository-relative paths), recorded with `modelType`.
-    case image(modelType: String, files: [String])
+    /// SDXL image pipeline (diffusers layout): configs, tokenizers and the fp16 weights when available.
+    case sdxl
 
-    var kind: ModelKind { if case .image = self { .image } else { .language } }
+    var kind: ModelKind { self == .sdxl ? .image : .language }
 }

@@ -381,7 +381,7 @@ struct ImageSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             screen.group("Memory") {
-                screen.row("Keep the image model loaded", "Unloading frees about \(Int(Double(ImagePreferences.spec.runtimeBytes) / 1_073_741_824)) GB; loading again takes a few seconds") {
+                screen.row("Keep the image model loaded", "Unloading frees about \(Int(Double(ImagePreferences.spec?.runtimeBytes(for: .init(1024, 1024)) ?? 0) / 1_073_741_824)) GB; loading again takes a few seconds") {
                     Picker("", selection: $keepLoaded) {
                         Text("Unload after each run").tag(0)
                         Text("1 minute").tag(1)
@@ -396,10 +396,18 @@ struct ImageSettings: View {
                     Toggle("", isOn: $makeRoom).toggleStyle(LXToggleStyle()).labelsHidden().fixedSize()
                 }
             }
-            screen.group("Model") {
-                let spec = ImagePreferences.spec
-                screen.row(spec.name, library.imageModel(spec).map { "Downloaded · \(ByteCountFormatter.string(fromByteCount: $0.diskBytes, countStyle: .file)) · works offline" } ?? "Not downloaded — open Image to download it") {
-                    Link("License", destination: spec.licenseURL).font(LX.F.ui(12)).foregroundStyle(LX.C.accentText)
+            screen.group("Models") {
+                screen.row("Image models", library.imageModels.isEmpty ? "None downloaded yet" : "\(library.imageModels.count) downloaded · they work offline") {
+                    LXButton(title: "Manage in Models") {
+                        AppState.shared.modelsKind = .image
+                        AppState.shared.modelsTab = library.imageModels.isEmpty ? .discover : .installed
+                        AppState.shared.screen = .models
+                    }
+                }
+                screen.row("LoRAs", "\(studio.loraLibrary.count) added · SDXL LoRA .safetensors files") {
+                    if let folder = studio.loraFolder {
+                        LXButton(title: "Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
+                    }
                 }
             }
             screen.group("Images") {

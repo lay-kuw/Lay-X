@@ -19,7 +19,11 @@ actor ScriptedImageEngine: ImageEngine {
         self.probe = probe
     }
 
-    func load(_ spec: ImageModelSpec, directory: URL) async throws { loads += 1; loaded = true }
+    private(set) var lastLoRAs: [LoRAFile] = []
+    func load(_ spec: ImageModelSpec, directory: URL, loras: [LoRAFile]) async throws -> LoRALoadReport {
+        loads += 1; loaded = true; lastLoRAs = loras
+        return LoRALoadReport(appliedLayers: loras.isEmpty ? 0 : 140)
+    }
     func unload() async { unloads += 1; loaded = false }
     func setRunning(_ v: Bool) { running = v }
 
@@ -58,11 +62,14 @@ struct ImageHistoryStoreTests {
     @Test func saveLoadDelete() async throws {
         let (store, dir) = try makeStore(); defer { try? FileManager.default.removeItem(at: dir) }
         let a = try await store.save(png: Data("a".utf8), prompt: "a cat", negativePrompt: "", modelID: "m", seed: 7, steps: 2,
-                                     size: 512, duration: 1.2, date: Date(timeIntervalSince1970: 1000))
-        let b = try await store.save(png: Data("b".utf8), prompt: "a dog", negativePrompt: "", modelID: "m", seed: UInt64.max - 1, steps: 1,
-                                     size: 512, duration: 0.8, date: Date(timeIntervalSince1970: 2000))
+                                     size: .init(512, 512), duration: 1.2, date: Date(timeIntervalSince1970: 1000))
+        let b = try await store.save(png: Data("b".utf8), prompt: "a dog", negativePrompt: "ugly", modelID: "m", seed: UInt64.max - 1,
+                                     steps: 30, cfg: 6.5, size: .init(1216, 832), loras: "pixel ×0.8", duration: 0.8,
+                                     date: Date(timeIntervalSince1970: 2000))
         let all = try await store.loadAll()
         #expect(all.map(\.prompt) == ["a dog", "a cat"])
+        #expect(all.first?.size == ImageSize(1216, 832))
+        #expect(all.first?.cfg == 6.5 && all.first?.loras == "pixel ×0.8" && all.first?.negativePrompt == "ugly")
         #expect(all.first?.seed == UInt64.max - 1, "64-bit seeds survive SQLite")
         #expect(try Data(contentsOf: try #require(store.url(for: a))) == Data("a".utf8))
         try await store.delete(b)
@@ -72,7 +79,8 @@ struct ImageHistoryStoreTests {
 
     @Test func missingFilesAreDropped() async throws {
         let (store, dir) = try makeStore(); defer { try? FileManager.default.removeItem(at: dir) }
-        let r = try await store.save(png: Data("x".utf8), prompt: "p", negativePrompt: "", modelID: "m", seed: 1, steps: 1, size: 512, duration: 1)
+        let r = try await store.save(png: Data("x".utf8), prompt: "p", negativePrompt: "", modelID: "m", seed: 1, steps: 1,
+                                     size: .init(512, 512), duration: 1)
         try FileManager.default.removeItem(at: try #require(store.url(for: r)))
         #expect(try await store.loadAll().isEmpty)
     }
@@ -87,15 +95,72 @@ struct ImageHistoryStoreTests {
         #expect(name.hasPrefix("layx-") && name.hasSuffix("-42-2.png"))
     }
 
-    @Test func sdxlTurboSpecUsesFp16Weights() {
-        let spec = ImageModelSpec.sdxlTurbo
-        #expect(spec.files.filter { $0.hasSuffix(".safetensors") }.allSatisfy { $0.contains(".fp16.") })
-        if case .image(let type, let files) = spec.downloadProfile {
-            #expect(type == "sdxl-turbo")
-            #expect(files.count == spec.files.count)
-        } else {
-            Issue.record("expected an image profile")
-        }
+    @Test func sdxlFilesPreferFp16AndRequireAPipeline() {
+        func f(_ p: String) -> HubFile { HubFile(path: p, size: 1, sha256: nil) }
+        let common = SDXLFiles.required.map(f)
+        let both = common + ["unet/diffusion_pytorch_model", "vae/diffusion_pytorch_model", "text_encoder/model", "text_encoder_2/model"]
+            .flatMap { [f($0 + ".safetensors"), f($0 + ".fp16.safetensors")] } + [f("unet/model.onnx"), f("sd_xl_base.safetensors")]
+        let picked = SDXLFiles.select(from: both).files?.map(\.path) ?? []
+        #expect(picked.filter { $0.hasSuffix(".safetensors") }.allSatisfy { $0.contains(".fp16.") })
+        #expect(picked.count == SDXLFiles.required.count + 4)
+        #expect(!picked.contains("unet/model.onnx"))
+        let fullOnly = common + ["unet/diffusion_pytorch_model", "vae/diffusion_pytorch_model", "text_encoder/model", "text_encoder_2/model"]
+            .map { f($0 + ".safetensors") }
+        #expect(SDXLFiles.select(from: fullOnly).files?.contains { $0.path == "unet/diffusion_pytorch_model.safetensors" } == true)
+        let r = SDXLFiles.select(from: [f("model.safetensors"), f("config.json")])
+        #expect(r.files == nil && r.missing.contains("unet/config.json"))
+    }
+
+    @Test func catalogAndSizes() {
+        #expect(ImageModelSpec.catalog.allSatisfy { $0.sizes.contains($0.defaultSize) && $0.stepRange.contains($0.defaultSteps) })
+        #expect(ImageSize.sdxl.allSatisfy { $0.width % 64 == 0 && $0.height % 64 == 0 })
+        let custom = ImageModelSpec.spec(for: ModelRepoID("someone/my-sdxl")!)
+        #expect(custom.isCustom && custom.defaultSize == ImageSize(1024, 1024))
+        #expect(ImageModelSpec.dreamShaperTurbo.runtimeBytes(for: .init(1024, 1024)) > ImageModelSpec.dreamShaperTurbo.runtimeBytes(for: .init(512, 512)))
+    }
+}
+
+@Suite("LoRA library")
+struct LoRALibraryTests {
+    /// Minimal safetensors file: 8-byte header length + JSON header (no tensor data needed for inspection).
+    func write(_ header: [String: Any], to url: URL) throws {
+        let json = try JSONSerialization.data(withJSONObject: header)
+        var length = UInt64(json.count).littleEndian
+        var data = Data(bytes: &length, count: 8)
+        data.append(json)
+        try data.write(to: url)
+    }
+
+    @Test func importInspectDelete() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("lx-lora-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let lib = LoRALibrary(folder: tmp.appendingPathComponent("lib"))
+        let t = ["dtype": "F16", "shape": [4, 4], "data_offsets": [0, 32]] as [String: Any]
+
+        let xl = tmp.appendingPathComponent("pixel-xl.safetensors")
+        try write(["lora_unet_input_blocks_4_1_proj_in.lora_down.weight": t, "lora_te2_text_model_encoder_layers_0_mlp_fc1.lora_up.weight": t,
+                   "__metadata__": ["ss_tag_frequency": "{\"img\": {\"pixel art\": 30, \"cat\": 2}}"]], to: xl)
+        let info = try lib.importFile(xl)
+        #expect(info.fit == .sdxl)
+        #expect(info.triggerWords.first == "pixel art")
+
+        let sd15 = tmp.appendingPathComponent("old.safetensors")
+        try write(["lora_unet_down_blocks_0_attentions_0_proj_in.lora_down.weight": t], to: sd15)
+        if case .otherBase = try lib.importFile(sd15).fit {} else { Issue.record("SD 1.x LoRA not detected") }
+
+        let diffusersXL = tmp.appendingPathComponent("papercut.safetensors")
+        try write(["lora_unet_down_blocks_1_attentions_0_proj_in.lora_down.weight": t], to: diffusersXL)
+        #expect(try lib.importFile(diffusersXL).fit == .sdxl)
+
+        #expect(throws: LoRALibrary.ImportError.alreadyExists("pixel-xl")) { try lib.importFile(xl) }
+        let notST = tmp.appendingPathComponent("x.ckpt"); try Data("x".utf8).write(to: notST)
+        #expect(throws: LoRALibrary.ImportError.notSafetensors) { try lib.importFile(notST) }
+
+        #expect(lib.list().map(\.name) == ["old", "papercut", "pixel-xl"])
+        try lib.delete("pixel-xl.safetensors")
+        #expect(lib.list().map(\.name) == ["old", "papercut"])
+        #expect(lib.url(for: "../evil.safetensors") == nil)
     }
 }
 
@@ -123,11 +188,13 @@ struct ImageStudioTests {
         let engine = ScriptedImageEngine()
         let (studio, dir) = try makeStudio(engine: engine, coordinator: InferenceCoordinator(engine: ScriptedEngine()), free: { .max })
         defer { try? FileManager.default.removeItem(at: dir) }
-        studio.generate(ImageRequest(prompt: "  a fox  ", steps: 2, seed: 10, count: 2), spec: .sdxlTurbo)
+        studio.generate(ImageRequest(prompt: "  a fox  ", negativePrompt: "blurry", steps: 2, cfg: 5, seed: 10, count: 2,
+                                     size: .init(1216, 832)), spec: .sdxlTurbo)
         try await waitIdle(studio)
         #expect(studio.error == nil)
         #expect(studio.history.map(\.seed) == [11, 10])
-        #expect(studio.history.allSatisfy { $0.prompt == "a fox" && $0.width == 512 })
+        #expect(studio.history.allSatisfy { $0.prompt == "a fox" && $0.width == 1216 && $0.height == 832 && $0.cfg == 5 })
+        #expect(studio.history.first?.negativePrompt == "blurry")
         #expect(studio.selectedID == studio.history.first?.id)
         #expect(studio.loadedModelID == "stabilityai/sdxl-turbo")
         // Second run reuses the loaded model.
@@ -202,6 +269,34 @@ struct ImageStudioTests {
         #expect(studio.history.count < 4)
         #expect(studio.notice == "Stopped.")
         #expect(studio.error == nil)
+    }
+
+    @Test func changingLoRAsReloadsTheModel() async throws {
+        let engine = ScriptedImageEngine()
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("lx-lora-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        var length = UInt64(2).littleEndian
+        var data = Data(bytes: &length, count: 8); data.append(Data("{}".utf8))
+        try data.write(to: tmp.appendingPathComponent("style.safetensors"))
+        let db = try SQLiteDatabase(location: .inMemory, migrations: LayXSchema.migrations)
+        let studio = ImageStudio(engine: engine, coordinator: InferenceCoordinator(engine: ScriptedEngine()),
+                                 store: ImageHistoryStore(database: db, folder: tmp.appendingPathComponent("img")),
+                                 loras: LoRALibrary(folder: tmp), modelDirectory: { _ in tmp }, availableMemory: { .max },
+                                 keepLoaded: { nil })
+        studio.generate(ImageRequest(prompt: "p", steps: 1, seed: 1), spec: .sdxlTurbo)
+        try await waitIdle(studio)
+        let lora = LoRAChoice(file: "style.safetensors", scale: 0.8)
+        studio.generate(ImageRequest(prompt: "p", steps: 1, seed: 1, loras: [lora]), spec: .sdxlTurbo)
+        try await waitIdle(studio)
+        #expect(await engine.loads == 2)
+        #expect(await engine.lastLoRAs.map(\.scale) == [0.8])
+        #expect(studio.loadedLoRAs == [lora])
+        #expect(studio.notice?.contains("140 layers") == true)
+        #expect(studio.history.first?.loras == "style ×0.8")
+        studio.generate(ImageRequest(prompt: "p", steps: 1, seed: 2, loras: [lora]), spec: .sdxlTurbo)
+        try await waitIdle(studio)
+        #expect(await engine.loads == 2)
     }
 
     @Test func releasesImageModelForTextModel() async throws {
