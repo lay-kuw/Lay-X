@@ -60,11 +60,15 @@ public struct GenerationRequest: Sendable {
     public var messages: [PromptMessage]
     public var parameters: GenerationParameters
     public var client: InferenceClient
+    /// Reasoning ("thinking") mode for models whose chat template supports `enable_thinking`
+    /// (e.g. Qwen3). `nil` = the model's default. Ignored by templates without the flag.
+    public var thinking: Bool?
 
-    public init(messages: [PromptMessage], parameters: GenerationParameters, client: InferenceClient) {
+    public init(messages: [PromptMessage], parameters: GenerationParameters, client: InferenceClient, thinking: Bool? = nil) {
         self.messages = messages
         self.parameters = parameters
         self.client = client
+        self.thinking = thinking
     }
 }
 

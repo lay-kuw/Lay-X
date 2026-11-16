@@ -47,7 +47,6 @@ struct RootView: View {
 
 struct Sidebar: View {
     @EnvironmentObject var state: AppState
-    @State private var search = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -57,14 +56,15 @@ struct Sidebar: View {
                 .padding(.leading, 4)
                 .padding(.top, 10)
 
-            LXField(placeholder: "Search or command", text: $search, symbol: "magnifyingglass")
-                .padding(.top, 20).padding(.bottom, 8)
-
             VStack(spacing: 1) {
                 ForEach([Screen.chat, .work, .models, .performance, .api]) { screen in
-                    NavRow(screen: screen, selected: state.screen == screen) { state.screen = screen }
+                    NavRow(screen: screen, selected: state.screen == screen) {
+                        // Clicking Chat while already in Chat starts a new chat.
+                        if screen == .chat && state.screen == .chat { state.newChat() } else { state.screen = screen }
+                    }
                 }
             }
+            .padding(.top, 20)
 
             contextual
                 .padding(.top, 4)
@@ -127,6 +127,11 @@ struct Sidebar: View {
             .contentShape(Rectangle())
             .onTapGesture { state.currentChatID = session.id }
             .contextMenu {
+                Button("Rename…") {
+                    state.currentChatID = session.id
+                    state.renamingChat = true
+                }
+                .disabled(session.messages.isEmpty)
                 Button(session.isPinned ? "Unpin" : "Pin") { chats.togglePin(session.id) }
                     .disabled(session.messages.isEmpty)
                 Divider()

@@ -129,7 +129,8 @@ public actor MLXEngine: InferenceEngine {
         }
         let lmInput: LMInput
         do {
-            lmInput = try await container.prepare(input: UserInput(chat: chat))
+            let context: [String: any Sendable]? = request.thinking.map { ["enable_thinking": $0] }
+            lmInput = try await container.prepare(input: UserInput(chat: chat, additionalContext: context))
         } catch {
             continuation.finish(throwing: InferenceError.generationFailed("prompt formatting failed: \(Self.describe(error))"))
             return

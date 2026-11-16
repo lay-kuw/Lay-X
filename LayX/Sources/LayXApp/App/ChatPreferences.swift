@@ -1,29 +1,28 @@
 import Foundation
 import LayXCore
 
-/// Chat-related preferences in UserDefaults (non-sensitive values only — never chat content).
+/// Chat-related preferences in UserDefaults (settings only — never chat content).
 enum ChatPreferences {
     static let temperatureKey = "lx.temperature"
     static let topPKey = "lx.topP"
     static let maxTokensKey = "lx.maxTokens"
     static let defaultChatModelKey = "lx.defaultChatModel"
-    static let presetKey = "lx.chatPreset"
+    static let thinkingKey = "lx.thinking"
+    /// The "Soul": persona / standing instructions used as the system prompt for Chat and Mini Chat.
+    static let soulKey = "lx.soul"
 
     static let defaultTemperature = 0.7
     static let defaultTopP = 0.95
     static let defaultMaxTokens = 4096
+    static let defaultThinking = true
+    static let soulLimit = 8000
 
-    /// System-prompt presets offered in the composer.
-    static let presets: [(name: String, prompt: String?)] = [
-        ("Default", nil),
-        ("Concise", "Answer concisely. Prefer short paragraphs and bullet points. No preamble."),
-        ("Swift expert", "You are an expert Swift, SwiftUI and Apple-platform engineer. Prefer modern Swift 6 concurrency. Show code when it helps."),
-        ("Japanese", "常に自然な日本語で回答してください。"),
-    ]
+    static var thinking: Bool {
+        UserDefaults.standard.object(forKey: thinkingKey) as? Bool ?? defaultThinking
+    }
 
-    static var presetName: String {
-        let name = UserDefaults.standard.string(forKey: presetKey) ?? "Default"
-        return presets.contains { $0.name == name } ? name : "Default"
+    static var soul: String {
+        (UserDefaults.standard.string(forKey: soulKey) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static var current: ChatGenerationSettings {
@@ -31,10 +30,10 @@ enum ChatPreferences {
         let temperature = d.object(forKey: temperatureKey) as? Double ?? defaultTemperature
         let topP = d.object(forKey: topPKey) as? Double ?? defaultTopP
         let maxTokens = d.object(forKey: maxTokensKey) as? Int ?? defaultMaxTokens
-        let prompt = presets.first { $0.name == presetName }?.prompt
         return ChatGenerationSettings(
             parameters: GenerationParameters(temperature: temperature, topP: topP, maxTokens: maxTokens).validated(),
-            systemPrompt: prompt)
+            systemPrompt: soul.isEmpty ? nil : String(soul.prefix(soulLimit)),
+            thinking: thinking)
     }
 }
 

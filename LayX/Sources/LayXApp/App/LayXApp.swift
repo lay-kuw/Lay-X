@@ -147,6 +147,8 @@ final class AppState: ObservableObject {
     /// Session shown in the main window's Chat screen.
     @Published var currentChatID: UUID?
     @Published var draft = ""
+    /// Header title is in edit mode.
+    @Published var renamingChat = false
 
     var chats: ChatSessionStore { AppServices.shared.chats }
 
@@ -160,6 +162,7 @@ final class AppState: ObservableObject {
     }
 
     func newChat() {
+        renamingChat = false
         currentChatID = chats.newSession()
         draft = ""
         screen = .chat

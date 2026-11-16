@@ -35,8 +35,7 @@ struct ChatScreen: View {
         ScreenHeader {
             ModelPicker()
             Text("/").font(LX.F.body).foregroundStyle(Color(hex: 0x5E6172))
-            Text(session?.title ?? "Untitled").font(LX.F.ui(13, .medium)).foregroundStyle(Color(hex: 0xC9CBD6))
-                .lineLimit(1)
+            ChatTitle()
             if session?.isPinned != true { Tag(text: "TEMP", color: LX.C.accentText) }
         } trailing: {
             let metrics = session?.messages.last(where: { $0.metrics != nil })?.metrics
@@ -58,6 +57,49 @@ struct ChatScreen: View {
             IconButton(symbol: "plus", help: "New chat") { state.newChat() }
             IconButton(symbol: "sidebar.right", help: "Inspector") { withAnimation(LX.M.panel) { state.inspector.toggle() } }
         }
+    }
+}
+
+// MARK: - Title (click to rename)
+
+struct ChatTitle: View {
+    @EnvironmentObject var state: AppState
+    @State private var text = ""
+    @FocusState private var focused: Bool
+    private var chats: ChatSessionStore { AppServices.shared.chats }
+
+    var body: some View {
+        let session = chats.session(state.currentChatID)
+        Group {
+            if state.renamingChat, let session {
+                TextField("Title", text: $text)
+                    .textFieldStyle(.plain)
+                    .font(LX.F.ui(13, .medium)).foregroundStyle(LX.C.primary)
+                    .frame(width: 260)
+                    .padding(.horizontal, 6).frame(height: 24)
+                    .well(radius: LX.R.sm, fill: Color.black.opacity(0.28))
+                    .focused($focused)
+                    .onAppear { text = session.title; focused = true }
+                    .onSubmit { commit(session.id) }
+                    .onKeyPress(.escape) { state.renamingChat = false; return .handled }
+                    .onChange(of: focused) { _, now in if !now { commit(session.id) } }
+            } else {
+                Text(session?.title ?? "Untitled").font(LX.F.ui(13, .medium)).foregroundStyle(Color(hex: 0xC9CBD6))
+                    .lineLimit(1)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 1) {
+                        if session?.messages.isEmpty == false { state.renamingChat = true }
+                    }
+                    .help("Click to rename")
+            }
+        }
+        .onChange(of: state.currentChatID) { state.renamingChat = false }
+    }
+
+    private func commit(_ id: UUID) {
+        guard state.renamingChat else { return }
+        chats.rename(id, to: text)
+        state.renamingChat = false
     }
 }
 
@@ -403,7 +445,7 @@ struct Composer: View {
     @Environment(InferenceStatusModel.self) private var inference
     @FocusState private var focused: Bool
     @State private var selection: TextSelection?
-    @AppStorage(ChatPreferences.presetKey) private var preset = "Default"
+    @AppStorage(ChatPreferences.thinkingKey) private var thinking = ChatPreferences.defaultThinking
     private var chats: ChatSessionStore { AppServices.shared.chats }
     private var generating: Bool { chats.isGenerating(state.currentChatID) }
 
@@ -424,19 +466,20 @@ struct Composer: View {
                 .padding(.horizontal, 14).padding(.top, 13).padding(.bottom, 9)
             HStack(spacing: 6) {
                 Menu {
-                    ForEach(ChatPreferences.presets, id: \.name) { p in
-                        Button { preset = p.name } label: {
-                            if p.name == ChatPreferences.presetName { Label(p.name, systemImage: "checkmark") } else { Text(p.name) }
-                        }
+                    Button { thinking = true } label: {
+                        if thinking { Label("Thinking", systemImage: "checkmark") } else { Text("Thinking") }
+                    }
+                    Button { thinking = false } label: {
+                        if !thinking { Label("No thinking", systemImage: "checkmark") } else { Text("No thinking") }
                     }
                 } label: {
-                    HStack(spacing: 6) { Text("Preset: \(ChatPreferences.presetName)"); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) }
+                    HStack(spacing: 6) { Text(thinking ? "Thinking" : "No thinking"); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) }
                         .font(LX.F.caption).foregroundStyle(LX.C.secondary)
                         .padding(.horizontal, 8).frame(height: 24)
                         .overlay(RoundedRectangle(cornerRadius: LX.R.sm).strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
                 }
                 .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                .help("System prompt preset for new replies")
+                .help("Reasoning mode for models that support it (e.g. Qwen3). Other models ignore it.")
                 Spacer()
                 contextMeter
                 if generating {

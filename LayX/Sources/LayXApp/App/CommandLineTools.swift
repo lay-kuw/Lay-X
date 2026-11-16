@@ -66,7 +66,8 @@ nonisolated enum CommandLineTools {
             print("loaded \(info.id) in \(String(format: "%.2f", info.loadDuration.seconds))s, context \(info.contextLength.map(String.init) ?? "?")")
             let request = GenerationRequest(
                 messages: [PromptMessage(role: .user, content: args[3])],
-                parameters: GenerationParameters(temperature: 0, maxTokens: maxTokens, seed: 0), client: .chat)
+                parameters: GenerationParameters(temperature: 0, maxTokens: maxTokens, seed: 0), client: .chat,
+                thinking: ProcessInfo.processInfo.environment["LAYX_THINKING"].map { $0 == "1" })
             for try await event in coordinator.generate(request) {
                 switch event {
                 case .text(let t): print(t, terminator: ""); fflush(stdout)

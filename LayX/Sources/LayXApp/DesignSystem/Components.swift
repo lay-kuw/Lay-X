@@ -282,8 +282,7 @@ struct LXButtonStyle: ButtonStyle {
         let label = configuration.label
             .font(LX.F.ui(12, kind == .primary ? .semibold : .medium))
             .lineLimit(1)
-            .padding(.leading, 11)
-            .padding(.trailing, 7)
+            .padding(.horizontal, 11)
             .frame(height: height)
         return Group {
             switch kind {

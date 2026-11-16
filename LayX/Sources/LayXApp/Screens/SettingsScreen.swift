@@ -5,6 +5,7 @@ import LayXCore
 struct SettingsScreen: View {
     enum Category: String, CaseIterable, Identifiable {
         case general = "General"
+        case soul = "Soul"
         case inference = "Models & Inference"
         case mini = "Mini Chat"
         case privacy = "Chats & Privacy"
@@ -48,6 +49,7 @@ struct SettingsScreen: View {
                     case .appearance: appearancePage
                     case .inference: inferencePage
                     case .mini: miniChatPage
+                    case .soul: soulPage
                     default:
                         Text("This section is not part of the design preview yet.")
                             .font(LX.F.body).foregroundStyle(LX.C.tertiary)
@@ -189,6 +191,55 @@ struct SettingsScreen: View {
     }
 
     @State private var storageError: String?
+
+    // MARK: Soul
+    @AppStorage(ChatPreferences.soulKey) private var soul = ""
+
+    private var soulPage: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel(text: "Soul").padding(.leading, 2)
+                VStack(alignment: .leading, spacing: 0) {
+                    ZStack(alignment: .topLeading) {
+                        if soul.isEmpty {
+                            Text("Who should the assistant be? e.g. “You are a calm senior engineer. Answer in Japanese unless asked otherwise. Be concise and show code when it helps.”")
+                                .font(LX.F.body).foregroundStyle(LX.C.tertiary)
+                                .padding(.horizontal, 5).padding(.vertical, 8)
+                                .allowsHitTesting(false)
+                        }
+                        TextEditor(text: $soul)
+                            .font(LX.F.body).foregroundStyle(LX.C.body)
+                            .scrollContentBackground(.hidden)
+                            .lineSpacing(4)
+                            .onChange(of: soul) { _, new in
+                                if new.count > ChatPreferences.soulLimit { soul = String(new.prefix(ChatPreferences.soulLimit)) }
+                            }
+                    }
+                    .frame(minHeight: 220)
+                    .padding(.horizontal, 11).padding(.vertical, 8)
+                    Rectangle().fill(Color.white.opacity(0.045)).frame(height: 1)
+                    HStack {
+                        Text("\(soul.count.formatted()) / \(ChatPreferences.soulLimit.formatted())")
+                            .font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary)
+                        Spacer()
+                        LXButton(title: "Clear") { soul = "" }.disabled(soul.isEmpty)
+                    }
+                    .padding(.horizontal, 16).frame(height: 44)
+                }
+                .well()
+                .clipShape(RoundedRectangle(cornerRadius: LX.R.lg))
+            }
+            HStack(spacing: 10) {
+                Image(systemName: "sparkle").foregroundStyle(LX.C.accentText)
+                Text("Sent as the system prompt with every Chat and Mini Chat message, starting with the next reply. Stored only on this Mac.")
+                    .font(LX.F.ui(12)).foregroundStyle(Color(hex: 0xC9CBD6))
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: LX.R.lg).fill(LX.C.accent.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: LX.R.lg).strokeBorder(LX.C.accent.opacity(0.16), lineWidth: 1))
+        }
+    }
 
     // MARK: Mini Chat
     private var miniChatPage: some View {

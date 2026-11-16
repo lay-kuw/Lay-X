@@ -4,11 +4,15 @@ import Observation
 /// Generation settings applied to chat turns (from Settings; per-chat overrides may come later).
 public struct ChatGenerationSettings: Sendable, Equatable {
     public var parameters: GenerationParameters
+    /// The user's "Soul": a persona / standing instructions sent as the system prompt.
     public var systemPrompt: String?
+    /// Reasoning mode (`nil` = model default).
+    public var thinking: Bool?
 
-    public init(parameters: GenerationParameters = GenerationParameters(), systemPrompt: String? = nil) {
+    public init(parameters: GenerationParameters = GenerationParameters(), systemPrompt: String? = nil, thinking: Bool? = nil) {
         self.parameters = parameters
         self.systemPrompt = systemPrompt
+        self.thinking = thinking
     }
 }
 
@@ -191,7 +195,7 @@ public final class ChatSessionStore {
         sessions[i].messages.append(ChatMessage(role: .assistant, content: "", modelID: model.id))
         let messageID = sessions[i].messages[sessions[i].messages.count - 1].id
 
-        let request = GenerationRequest(messages: prompt.messages, parameters: config.parameters, client: .chat)
+        let request = GenerationRequest(messages: prompt.messages, parameters: config.parameters, client: .chat, thinking: config.thinking)
         let clock = ContinuousClock()
         var buffer = ""
         var lastFlush = clock.now
