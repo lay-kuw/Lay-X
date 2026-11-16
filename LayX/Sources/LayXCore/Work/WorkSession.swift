@@ -256,8 +256,16 @@ public final class WorkSession {
         rescan()
     }
 
+    /// Bumped on every rescan (the UI reloads an open file preview).
+    public private(set) var revision = 0
+
     public func rescan() {
         entries = WorkspaceScanner.scan(workspace)
+        revision += 1
+        if let focus = focusPath, changeSet?.changes.contains(where: { $0.path == focus }) != true,
+           !entries.contains(where: { $0.path == focus }) {
+            focusPath = nil   // the file was deleted outside Lay X
+        }
     }
 
     public var selectedChanges: [ProposedChange] { changeSet?.changes.filter(\.selected) ?? [] }

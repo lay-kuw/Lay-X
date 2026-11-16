@@ -18,7 +18,7 @@ nonisolated enum CommandLineTools {
         case "--mlx-selftest":
             print("mlx-selftest: \(MLXSelfTest.run())")
             exit(0)
-        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check", "--preempt-check":
+        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check", "--preempt-check", "--watch-check":
             Task.detached {
                 do {
                     try await run(args)
@@ -35,7 +35,7 @@ nonisolated enum CommandLineTools {
     }
 
     /// Commands handled headlessly; anything else starts the GUI.
-    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check", "--preempt-check"]
+    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check", "--preempt-check", "--watch-check"]
 
     private static func run(_ args: [String]) async throws {
         let store = ModelStore(root: try ModelStore.defaultRoot())
@@ -205,6 +205,25 @@ nonisolated enum CommandLineTools {
                 throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "")
             }
             try await CacheCheck.run(model: model)
+        case "--watch-check":
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lx-watch-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            final class Log: @unchecked Sendable { var events: [String] = [] }   // main-queue only
+            let log = Log()
+            let watcher = await MainActor.run {
+                FolderWatcher(url: dir, latency: 0.1) { gone in log.events.append(gone ? "root gone" : "changed") }
+            }
+            try await Task.sleep(for: .milliseconds(500))
+            try "a".write(to: dir.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+            try await Task.sleep(for: .milliseconds(800))
+            print("after create: \(await MainActor.run { log.events })")
+            try "b".write(to: dir.appendingPathComponent("a.txt"), atomically: false, encoding: .utf8)
+            try await Task.sleep(for: .milliseconds(800))
+            print("after edit: \(await MainActor.run { log.events })")
+            try FileManager.default.removeItem(at: dir)
+            try await Task.sleep(for: .milliseconds(800))
+            print("after delete folder: \(await MainActor.run { log.events })")
+            _ = watcher
         case "--preempt-check":
             guard args.count >= 3, let id = ModelRepoID(args[2]), let model = store.installedModel(id) else {
                 throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "")

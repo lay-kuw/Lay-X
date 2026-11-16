@@ -320,7 +320,9 @@ struct ChatThread: View {
         let generating = chats.isGenerating(session.id)
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 22) {
+                // A plain VStack: a LazyVStack anchored at the bottom mis-measures its content when the screen
+                // reappears and shows nothing until scrolled. Rows are Equatable, so this stays cheap.
+                VStack(alignment: .leading, spacing: 22) {
                     if let omitted = chats.omittedMessages[session.id] {
                         Text("\(omitted) earlier message\(omitted == 1 ? "" : "s") didn’t fit the model’s context window and \(omitted == 1 ? "was" : "were") left out of the last reply.")
                             .font(LX.F.caption).foregroundStyle(LX.C.tertiary)
@@ -385,6 +387,11 @@ struct ChatThread: View {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
             .onChange(of: session.id) { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onAppear {
+                followBottom = true
+                proxy.scrollTo("bottom", anchor: .bottom)
+                DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
         }
     }
 

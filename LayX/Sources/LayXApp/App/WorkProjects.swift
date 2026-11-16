@@ -22,6 +22,7 @@ final class WorkProjects {
     static let storageKey = "lx.workProjects"
     static let defaultWorkModelKey = "lx.defaultWorkModel"
     @ObservationIgnored private var accessing: Set<String> = []
+    @ObservationIgnored private var watchers: [String: FolderWatcher] = [:]
 
     init() {
         if let data = UserDefaults.standard.data(forKey: Self.storageKey),
@@ -50,11 +51,28 @@ final class WorkProjects {
                 return try await services.coordinator.load(model.reference)
             }, instructions: { ChatPreferences.workInstructions })
             sessions[project.id] = s
+            // Changes made outside Lay X (editor, git, Finder) show up right away.
+            watchers[project.id] = FolderWatcher(url: ws.root) { [weak self, weak s] rootGone in
+                guard let self else { return }
+                if rootGone || !FileManager.default.fileExists(atPath: ws.root.path) {
+                    self.folderDisappeared(project)
+                } else {
+                    s?.rescan()
+                }
+            }
             return s
         } catch {
             self.error = "“\(project.name)” isn’t available any more (moved or deleted?)."
             return nil
         }
+    }
+
+    /// The project folder was deleted or moved away: drop its session; the screen explains what happened.
+    private func folderDisappeared(_ project: Project) {
+        sessions[project.id]?.cancel()
+        sessions[project.id] = nil
+        watchers[project.id] = nil
+        error = "“\(project.name)” was moved or deleted. Open the folder again to continue."
     }
 
     static func defaultWorkModel(in library: ModelLibrary) -> InstalledModel? {

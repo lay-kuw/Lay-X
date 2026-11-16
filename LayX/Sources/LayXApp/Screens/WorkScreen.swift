@@ -136,6 +136,7 @@ struct WorkProjectView: View {
         .animation(LX.M.panel, value: changes.isEmpty)
         .onChange(of: session.focusPath) { loadPreview() }
         .onChange(of: session.changeSet) { loadPreview() }
+        .onChange(of: session.revision) { loadPreview() }
         .onAppear { loadPreview() }
     }
 
