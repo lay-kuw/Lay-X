@@ -33,8 +33,9 @@ struct ModelsScreen: View {
         VStack(spacing: 0) {
             ScreenHeader {
                 Text("Models").font(LX.F.title)
-                Segmented(options: [(Tab.installed, "Installed"), (.discover, "Discover"), (.downloads, downloadsTitle)],
-                          selection: $state.modelsTab)
+                Segmented(options: [(Tab.installed, "Installed"), (.discover, "Discover"), (.downloads, "Downloads")],
+                          selection: $state.modelsTab,
+                          indicators: library.activeDownloads.isEmpty ? [:] : [.downloads: "arrow.down.circle.fill"])
                     .padding(.leading, 10)
             } trailing: {
                 LXField(placeholder: "Filter or paste HF repo", text: $filter, symbol: "magnifyingglass").frame(width: 220)
@@ -79,7 +80,7 @@ struct ModelsScreen: View {
             if selection == nil { selection = inference.loadedModel?.id ?? library.installed.first?.id.description }
         }
         .onChange(of: tab) { _, new in
-            if new == .discover && library.searchResults.isEmpty { library.search(filter) }
+            if new == .discover && library.searchResults.isEmpty { library.search(filter, debounce: false) }
         }
         .onChange(of: filter) { _, new in
             if tab == .discover { library.search(new) }
@@ -91,11 +92,6 @@ struct ModelsScreen: View {
         } message: { id in
             Text("Removes \(id.description) from \(library.store.root.path). Other files are not touched.")
         }
-    }
-
-    private var downloadsTitle: String {
-        let n = library.activeDownloads.count + library.incomplete.filter { p in !library.activeDownloads.contains { $0.id == p.id } }.count
-        return n > 0 ? "Downloads \(n)" : "Downloads"
     }
 
     private func addModel() {
@@ -196,8 +192,10 @@ struct ModelsScreen: View {
                 .background(LX.C.accent.opacity(on ? 0.08 : 0))
                 .overlay(alignment: .bottom) { Rectangle().fill(LX.C.rowLine).frame(height: 1) }
                 .contentShape(Rectangle())
-                .onTapGesture { selection = id }
-                .onTapGesture(count: 2) { library.load(m) }
+                // A count:2 tap gesture would delay every single click by the double-click interval;
+                // handle both simultaneously so selection is immediate.
+                .simultaneousGesture(TapGesture().onEnded { selection = id })
+                .simultaneousGesture(TapGesture(count: 2).onEnded { library.load(m) })
             }
             if filteredInstalled.isEmpty {
                 emptyRow(library.installed.isEmpty ? "No models installed." : "No installed model matches “\(filter)”.")
@@ -241,42 +239,76 @@ struct ModelsScreen: View {
     // MARK: Discover
 
     private var discoverTable: some View {
-        VStack(spacing: 0) {
-            tableHeader(["Model", "Params", "Quant", "Arch", "Status", "Downloads", "Updated"])
-            ForEach(library.searchResults) { r in
-                let id = r.id.description
-                let on = id == selection
-                let compat = library.compatibility[r.id] ?? .unknown
-                HStack(spacing: 0) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(ModelDisplay.name(r.id)).font(LX.F.ui(12.5, on ? .semibold : .medium)).lineLimit(1)
-                        Text(id).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    Text(ModelDisplay.parameters(r.id) ?? "—").font(LX.F.mono(12)).frame(width: 90, alignment: .leading)
-                    Tag(text: ModelDisplay.quant(bits: r.quantizationBits), color: Color(hex: 0xC9CBD6)).frame(width: 80, alignment: .leading)
-                    Text(r.modelType ?? "—").font(LX.F.mono(11)).lineLimit(1).frame(width: 80, alignment: .trailing)
-                    statusText(r.id, compat).frame(width: 80, alignment: .trailing)
-                    Text(r.downloads.formatted(.number.notation(.compactName))).font(LX.F.mono(12)).frame(width: 70, alignment: .trailing)
-                    Text(ModelDisplay.age(r.lastModified)).font(LX.F.mono(12)).foregroundStyle(LX.C.tertiary).frame(width: 60, alignment: .trailing)
-                }
-                .foregroundStyle(compat.isCompatible ? LX.C.body : LX.C.tertiary)
-                .padding(.horizontal, 12).frame(height: 46)
-                .background(LX.C.accent.opacity(on ? 0.08 : 0))
-                .overlay(alignment: .bottom) { Rectangle().fill(LX.C.rowLine).frame(height: 1) }
-                .contentShape(Rectangle())
-                .onTapGesture { selection = id }
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Segmented(options: HubAPI.Sort.allCases.map { ($0, $0.title) },
+                          selection: Binding(get: { library.sort }, set: { library.sort = $0; library.search(filter, debounce: false) }))
+                Spacer()
+                Segmented(options: [(true, "mlx-community"), (false, "All MLX")],
+                          selection: Binding(get: { library.curatedOnly }, set: { library.curatedOnly = $0; library.search(filter, debounce: false) }))
+                    .help("mlx-community hosts curated MLX conversions; All MLX includes every repo tagged mlx")
             }
-            if library.isSearching && library.searchResults.isEmpty {
-                emptyRow("Searching Hugging Face…")
-            } else if let err = library.searchError {
-                emptyRow(err)
-            } else if library.searchResults.isEmpty {
-                emptyRow("No MLX models found for “\(filter)”.")
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    th("Model").frame(maxWidth: .infinity, alignment: .leading)
+                    th("Params").frame(width: 80, alignment: .leading)
+                    th("Quant").frame(width: 66, alignment: .leading)
+                    th("Arch").frame(width: 104, alignment: .leading)
+                    th("Status").frame(width: 92, alignment: .leading)
+                    th("Downloads").frame(width: 86, alignment: .trailing)
+                    th("Likes").frame(width: 56, alignment: .trailing)
+                    th("Updated").frame(width: 66, alignment: .trailing)
+                }
+                .padding(.horizontal, 12).frame(height: 30)
+                Rectangle().fill(LX.C.divider).frame(height: 1)
+                ForEach(library.searchResults) { r in
+                    let id = r.id.description
+                    let on = id == selection
+                    let compat = library.compatibility[r.id] ?? .unknown
+                    HStack(spacing: 0) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(ModelDisplay.name(r.id)).font(LX.F.ui(12.5, on ? .semibold : .medium)).lineLimit(1)
+                            Text(id).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(ModelDisplay.parameters(r.id) ?? "—").font(LX.F.mono(12)).lineLimit(1).frame(width: 80, alignment: .leading)
+                        Tag(text: ModelDisplay.quant(bits: r.quantizationBits), color: Color(hex: 0xC9CBD6)).frame(width: 66, alignment: .leading)
+                        Text(r.modelType ?? "—").font(LX.F.mono(11)).lineLimit(1).truncationMode(.tail).frame(width: 104, alignment: .leading)
+                        statusText(r.id, compat).frame(width: 92, alignment: .leading)
+                        Text(r.downloads.formatted(.number.notation(.compactName))).font(LX.F.mono(12)).frame(width: 86, alignment: .trailing)
+                        Text(r.likes.formatted(.number.notation(.compactName))).font(LX.F.mono(12)).frame(width: 56, alignment: .trailing)
+                        Text(ModelDisplay.age(r.lastModified)).font(LX.F.mono(12)).foregroundStyle(LX.C.tertiary).frame(width: 66, alignment: .trailing)
+                    }
+                    .foregroundStyle(compat.isCompatible ? LX.C.body : LX.C.tertiary)
+                    .padding(.horizontal, 12).frame(height: 46)
+                    .background(LX.C.accent.opacity(on ? 0.08 : 0))
+                    .overlay(alignment: .bottom) { Rectangle().fill(LX.C.rowLine).frame(height: 1) }
+                    .contentShape(Rectangle())
+                    .onTapGesture { selection = id }
+                }
+                if library.isSearching && library.searchResults.isEmpty {
+                    emptyRow("Searching Hugging Face…")
+                } else if let err = library.searchError {
+                    emptyRow(err)
+                } else if library.searchResults.isEmpty {
+                    emptyRow(filter.isEmpty ? "No MLX language models on this page." : "No MLX models found for “\(filter)”.")
+                }
+            }
+            .well()
+            .clipShape(RoundedRectangle(cornerRadius: LX.R.lg))
+            .opacity(library.isSearching && !library.searchResults.isEmpty ? 0.6 : 1)
+
+            HStack(spacing: 8) {
+                Text("Page \(library.pageNumber) · \(library.searchResults.count) language models · sorted by \(library.sort.title.lowercased())")
+                    .font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary)
+                if library.isSearching { ProgressView().controlSize(.small) }
+                Spacer()
+                LXButton(title: "Previous", symbol: "chevron.left") { library.previousPage() }
+                    .disabled(library.pageNumber <= 1 || library.isSearching)
+                LXButton(title: "Next", symbol: "chevron.right") { library.nextPage() }
+                    .disabled(!library.hasNextPage || library.isSearching)
             }
         }
-        .well()
-        .clipShape(RoundedRectangle(cornerRadius: LX.R.lg))
     }
 
     @ViewBuilder private func statusText(_ id: ModelRepoID, _ compat: ModelCompatibility) -> some View {

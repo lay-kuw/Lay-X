@@ -80,8 +80,8 @@ struct PaneBackground: ViewModifier {
         return content
             .background {
                 ZStack {
-                    shape.fill(.ultraThinMaterial)
-                    shape.fill(tint.opacity(LX.Glass.tintScale(t) * (fullGlass ? LX.Glass.fullGlassScale : 1)))
+                    if !fullGlass { shape.fill(.ultraThinMaterial) }
+                    shape.fill(tint.opacity(LX.Glass.tintScale(t) * (fullGlass ? LX.Glass.fullGlassPaneScale : 1)))
                 }
             }
             .clipShape(shape)
@@ -106,7 +106,7 @@ struct WellBackground: ViewModifier {
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         return content
-            .background(shape.fill(fill.opacity(fullGlass ? 0.6 : 1)))
+            .background(shape.fill(fill.opacity(fullGlass ? LX.Glass.fullGlassWellScale : 1)))
             .overlay(shape.strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
     }
 }
@@ -403,16 +403,25 @@ struct Segmented<T: Hashable>: View {
     let options: [(T, String)]
     @Binding var selection: T
     var mono = false
+    /// Optional live indicator (SF Symbol) shown after a segment's title, e.g. while downloading.
+    var indicators: [T: String] = [:]
     var body: some View {
         HStack(spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.offset) { _, option in
                 let (value, title) = option
                 Button { withAnimation(LX.M.hover) { selection = value } } label: {
-                    Text(title)
+                    HStack(spacing: 5) {
+                        Text(title)
+                        if let symbol = indicators[value] {
+                            Image(systemName: symbol).font(.system(size: 10, weight: .semibold)).foregroundStyle(LX.C.liveCyan)
+                                .symbolEffect(.pulse, options: .repeating)
+                        }
+                    }
                         .font(mono ? LX.F.mono(12) : LX.F.ui(12))
                         .foregroundStyle(selection == value ? LX.C.primary : LX.C.secondary)
                         .padding(.horizontal, 10)
                         .frame(height: 24)
+                        .contentShape(Rectangle())
                         .background {
                             if selection == value {
                                 RoundedRectangle(cornerRadius: 5).fill(LX.C.accent.opacity(0.18))

@@ -60,7 +60,11 @@ final class ModelLibrary {
         if let chosen {
             guard let r = try? ModelStore.root(forChosenFolder: chosen) else { return "That folder can’t be used for models." }
             root = r
-            UserDefaults.standard.set(root.path, forKey: AppServices.modelStorePathKey)
+            if let d = try? ModelStore.defaultRoot(), ModelStore.canonicalPath(d) == root.path {
+                UserDefaults.standard.removeObject(forKey: AppServices.modelStorePathKey)
+            } else {
+                UserDefaults.standard.set(root.path, forKey: AppServices.modelStorePathKey)
+            }
         } else {
             UserDefaults.standard.removeObject(forKey: AppServices.modelStorePathKey)
             guard let r = try? ModelStore.defaultRoot() else { return "The default folder isn’t available." }
@@ -99,16 +103,53 @@ final class ModelLibrary {
 
     // MARK: Discovery
 
-    func search(_ query: String) {
+    var sort: HubAPI.Sort = .trending
+    /// true = only mlx-community (curated conversions); false = every MLX repo on the Hub.
+    var curatedOnly = true
+    private(set) var pageNumber = 1
+    private(set) var hasNextPage = false
+    @ObservationIgnored private var pageURLs: [URL?] = [nil]   // index = pageNumber - 1 (nil = first page)
+    @ObservationIgnored private var nextURL: URL?
+    @ObservationIgnored private var lastQuery = ""
+
+    /// New search (resets to page 1). Debounced while typing.
+    func search(_ query: String, debounce: Bool = true) {
+        lastQuery = query
+        pageURLs = [nil]
+        pageNumber = 1
+        load(pageURL: nil, debounce: debounce)
+    }
+
+    func nextPage() {
+        guard let next = nextURL else { return }
+        if pageURLs.count <= pageNumber { pageURLs.append(next) } else { pageURLs[pageNumber] = next }
+        pageNumber += 1
+        load(pageURL: next, debounce: false)
+    }
+
+    func previousPage() {
+        guard pageNumber > 1 else { return }
+        pageNumber -= 1
+        load(pageURL: pageURLs[pageNumber - 1], debounce: false)
+    }
+
+    private func load(pageURL: URL?, debounce: Bool) {
         searchTask?.cancel()
         isSearching = true
         searchError = nil
+        let query = lastQuery, sort = self.sort, author = curatedOnly ? "mlx-community" : nil
         searchTask = Task {
-            try? await Task.sleep(for: .milliseconds(250))  // debounce typing
+            if debounce { try? await Task.sleep(for: .milliseconds(250)) }
             guard !Task.isCancelled else { return }
             do {
-                let results = try await hub.search(query).filter(\.isMLXLanguageModelRepo)
+                let page: HubAPI.Page
+                if let pageURL {
+                    page = try await hub.page(at: pageURL)
+                } else {
+                    page = try await hub.searchPage(query, author: author, sort: sort, limit: 50)
+                }
                 guard !Task.isCancelled else { return }
+                let results = page.results.filter(\.isMLXLanguageModelRepo)
                 var compat: [ModelRepoID: ModelCompatibility] = [:]
                 for r in results {
                     if let type = r.modelType {
@@ -119,6 +160,8 @@ final class ModelLibrary {
                 }
                 searchResults = results
                 compatibility.merge(compat) { $1 }
+                nextURL = page.next
+                hasNextPage = page.next != nil
             } catch is CancellationError {
                 return
             } catch {

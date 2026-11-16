@@ -144,7 +144,7 @@ struct MiniChatView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage(LX.Glass.fullGlassKey) private var fullGlass = false
     private var transparency: Double { followReduce && reduceTransparency ? 0 : storedTransparency }
-    private var miniTint: Double { LX.Glass.tintScale(transparency) * (fullGlass && !(followReduce && reduceTransparency) ? LX.Glass.fullGlassScale : 1) }
+    private var miniTint: Double { LX.Glass.tintScale(transparency) * (fullGlass && !(followReduce && reduceTransparency) ? LX.Glass.fullGlassPaneScale : 1) }
     @FocusState private var focused: Bool
     @State private var selection: TextSelection?
 

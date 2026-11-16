@@ -29,7 +29,7 @@ final class AppServices {
     static let modelStorePathKey = "lx.modelStorePath"
     static let databaseFolderKey = "lx.databaseFolder"
 
-    /// `<chosen folder>/LayX.sqlite`, or `~/Library/Application Support/Lay X/LayX.sqlite` by default.
+    /// `<chosen folder>/LayX.sqlite`, or `~/.config/lay-x/database/LayX.sqlite` by default.
     static func databaseURL() throws -> URL {
         if let folder = UserDefaults.standard.string(forKey: databaseFolderKey) {
             return URL(fileURLWithPath: folder, isDirectory: true).appendingPathComponent(LayXSchema.fileName)
@@ -72,8 +72,12 @@ final class AppServices {
                 message = "Database moved to \((newURL.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath)."
             }
             let db = try SQLiteDatabase(location: .file(newURL), migrations: LayXSchema.migrations)
-            if let folder { UserDefaults.standard.set(ModelStore.canonicalPath(folder), forKey: Self.databaseFolderKey) }
-            else { UserDefaults.standard.removeObject(forKey: Self.databaseFolderKey) }
+            let defaultFolder = try? LayXSchema.defaultURL().deletingLastPathComponent()
+            if let folder, ModelStore.canonicalPath(folder) != defaultFolder.map(ModelStore.canonicalPath) {
+                UserDefaults.standard.set(ModelStore.canonicalPath(folder), forKey: Self.databaseFolderKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.databaseFolderKey)
+            }
             database = db
             databaseError = nil
             pinnedChats = PinnedChatRepository(database: db)

@@ -78,9 +78,14 @@ public struct HubModelSummary: Sendable, Hashable, Identifiable {
     public var tags: [String]
     public var libraryName: String?
     public var pipelineTag: String?
+    public var likes: Int = 0
+    public var trendingScore: Int = 0
 
     public init(id: ModelRepoID, modelType: String?, quantizationBits: Int?, parameterCount: Int64?, downloads: Int,
-                lastModified: Date?, tags: [String], libraryName: String?, pipelineTag: String? = nil) {
+                lastModified: Date?, tags: [String], libraryName: String?, pipelineTag: String? = nil,
+                likes: Int = 0, trendingScore: Int = 0) {
+        self.likes = likes
+        self.trendingScore = trendingScore
         self.id = id
         self.modelType = modelType
         self.quantizationBits = quantizationBits
@@ -99,7 +104,8 @@ public struct HubModelSummary: Sendable, Hashable, Identifiable {
         let isMLX = libraryName == "mlx" || tags.contains("mlx")
         let excludedLibraries: Set<String> = ["mlx-audio", "mlx-vlm", "mlx-embeddings"]
         let excludedTags: Set<String> = ["sentence-similarity", "feature-extraction", "text-ranking", "sentence-transformers"]
-        let pipelineOK = pipelineTag == nil || pipelineTag == "text-generation"
+        // image-text-to-text repos (e.g. Qwen3.5/3.6) ship a language model MLXLLM can run as text-only.
+        let pipelineOK = pipelineTag == nil || pipelineTag == "text-generation" || pipelineTag == "image-text-to-text"
         return isMLX && pipelineOK && !excludedLibraries.contains(libraryName ?? "")
             && excludedTags.isDisjoint(with: tags)
     }

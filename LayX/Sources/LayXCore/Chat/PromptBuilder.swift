@@ -71,6 +71,12 @@ public enum ThinkingParser {
 
     public static func split(_ text: String) -> Parts {
         guard let open = text.range(of: "<think>") else {
+            // Opening tag supplied by the prompt template: everything before "</think>" is reasoning.
+            if let close = text.range(of: "</think>") {
+                let thinking = text[..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+                return Parts(thinking: thinking.isEmpty ? nil : thinking,
+                             answer: text[close.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines), isThinking: false)
+            }
             return Parts(thinking: nil, answer: text, isThinking: false)
         }
         let before = String(text[..<open.lowerBound])

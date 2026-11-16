@@ -240,6 +240,8 @@ actor RecordingRepository: PinnedChatStoring {
         #expect(ThinkingParser.split("<think>\n\n</think>\n\nHi") == .init(thinking: nil, answer: "Hi", isThinking: false))
         #expect(ThinkingParser.split("<think>step 1</think>Done") == .init(thinking: "step 1", answer: "Done", isThinking: false))
         #expect(ThinkingParser.split("<think>still going") == .init(thinking: "still going", answer: "", isThinking: true))
+        // Template-prefilled "<think>" (Qwen3.5/3.6): only the closing tag appears in the output.
+        #expect(ThinkingParser.split("Let me think.\n</think>\n\nAnswer") == .init(thinking: "Let me think.", answer: "Answer", isThinking: false))
     }
 }
 

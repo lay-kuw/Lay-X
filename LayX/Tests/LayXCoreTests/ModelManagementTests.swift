@@ -327,11 +327,18 @@ struct FixedArchitectures: ModelArchitectureSupport {
         let vlm = HubModelSummary(id: ModelRepoID("mlx-community/Qwen3.5-0.8B-4bit")!, modelType: "qwen3_5",
                                   quantizationBits: 4, parameterCount: nil, downloads: 0, lastModified: nil,
                                   tags: ["transformers", "mlx"], libraryName: "transformers", pipelineTag: "image-text-to-text")
-        #expect(!vlm.isMLXLanguageModelRepo)
+        #expect(vlm.isMLXLanguageModelRepo, "VL repos like Qwen3.5/3.6 run text-only; compatibility is decided by architecture")
         let llm = HubModelSummary(id: ModelRepoID("mlx-community/Qwen3-4B-4bit")!, modelType: "qwen3",
                                   quantizationBits: 4, parameterCount: nil, downloads: 0, lastModified: nil,
                                   tags: ["mlx", "text-generation"], libraryName: "mlx", pipelineTag: "text-generation")
         #expect(llm.isMLXLanguageModelRepo)
+    }
+
+    @Test func nextLinkParsing() {
+        let h = #"<https://huggingface.co/api/models?sort=downloads&cursor=abc>; rel="next", <https://x>; rel="prev""#
+        #expect(HubAPI.nextLink(h)?.absoluteString == "https://huggingface.co/api/models?sort=downloads&cursor=abc")
+        #expect(HubAPI.nextLink(nil) == nil)
+        #expect(HubAPI.nextLink(#"<https://x>; rel="prev""#) == nil)
     }
 
     @Test func requiredFilesSelection() {

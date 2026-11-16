@@ -49,10 +49,10 @@ public enum LayXSchema {
         }
     }
 
-    /// `~/Library/Application Support/Lay X/LayX.sqlite`
+    /// `~/.config/lay-x/database/LayX.sqlite` (folder created if missing).
     public static func defaultURL() throws -> URL {
-        let base = try FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        return base.appendingPathComponent("Lay X", isDirectory: true).appendingPathComponent("LayX.sqlite")
+        let dir = LayXPaths.configRoot.appendingPathComponent("database", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        return dir.appendingPathComponent(fileName)
     }
 }

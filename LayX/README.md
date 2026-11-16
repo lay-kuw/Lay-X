@@ -43,6 +43,10 @@ $B --soak         mlx-community/Qwen3-4B-4bit 80    # memory drift over repeated
 $B --search qwen3 ; $B --list-models ; $B --keychain-check
 ```
 
+## App icon
+Source: `Sources/LayXIcon/LX.png` (square, ≥ 1024 px). `scripts/build-app.sh` renders `AppIcon.icns`
+(16–1024 px, @1x/@2x) with `sips` + `iconutil` into the bundle.
+
 ## Layout
 | Target | Contents |
 |---|---|
@@ -51,7 +55,7 @@ $B --search qwen3 ; $B --list-models ; $B --keychain-check
 | `LayXServer` | OpenAI-compatible server (Hummingbird 2.28.1), API keys (Keychain) |
 | `LayXApp` | SwiftUI app — design system from `DesignPreview/`, screens, Mini Chat panel |
 
-Data: pinned chats + benchmarks in `LayX.sqlite` (default `~/Library/Application Support/Lay X/`,
-movable); models in `~/Library/Application Support/Lay X/Models` (movable); API key hashes in the
+Data: pinned chats + benchmarks in `LayX.sqlite` (default `~/.config/lay-x/database/`, movable);
+models in `~/.config/lay-x/models` (movable; both folders are created if missing); API key hashes in the
 Keychain; preferences in UserDefaults. Temporary chats are never written anywhere.
 

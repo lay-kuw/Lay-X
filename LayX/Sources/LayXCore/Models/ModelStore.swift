@@ -13,11 +13,11 @@ public struct ModelStore: Sendable {
         self.root = root.standardizedFileURL
     }
 
-    /// `~/Library/Application Support/Lay X/Models`
+    /// `~/.config/lay-x/models` (created if missing).
     public static func defaultRoot() throws -> URL {
-        let base = try FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        return base.appendingPathComponent("Lay X", isDirectory: true).appendingPathComponent("Models", isDirectory: true)
+        let url = LayXPaths.configRoot.appendingPathComponent("models", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        return url
     }
 
     public static let partialDirectoryName = ".partial"

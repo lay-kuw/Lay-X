@@ -133,6 +133,7 @@ struct ModelPicker: View {
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(LX.C.tertiary)
             }
             .padding(.horizontal, 10).frame(height: 30)
+            .contentShape(Rectangle())
             .background(RoundedRectangle(cornerRadius: LX.R.md).fill(Color.white.opacity(0.05)))
             .overlay(RoundedRectangle(cornerRadius: LX.R.md).strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
         }
@@ -255,7 +256,8 @@ struct ChatThread: View {
 struct MessageView: View, Equatable {
     let message: ChatMessage
     var streaming = false
-    @State private var showReasoning = false
+    /// nil = automatic (expanded while thinking, collapsed when done); set when the user toggles it.
+    @State private var reasoningExpanded: Bool?
 
     static func == (a: MessageView, b: MessageView) -> Bool { a.message == b.message && a.streaming == b.streaming }
 
@@ -272,15 +274,18 @@ struct MessageView: View, Equatable {
             if message.role == .assistant {
                 let parts = ThinkingParser.split(message.content)
                 if let thinking = parts.thinking {
-                    Button { withAnimation(LX.M.hover) { showReasoning.toggle() } } label: {
+                    let expanded = reasoningExpanded ?? parts.isThinking
+                    Button { withAnimation(LX.M.hover) { reasoningExpanded = !expanded } } label: {
                         HStack(spacing: 5) {
-                            Image(systemName: showReasoning ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .semibold))
+                            Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .semibold))
                             Text(parts.isThinking ? "Thinking…" : "Reasoning")
+                            if !parts.isThinking { Text("· \(thinking.count.formatted()) chars").foregroundStyle(LX.C.tertiary) }
                         }
                         .font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    if showReasoning || parts.isThinking {
+                    if expanded {
                         Text(thinking).font(LX.F.bodySmall).foregroundStyle(LX.C.tertiary).lineSpacing(4)
                             .textSelection(.enabled)
                             .padding(.leading, 10)
@@ -420,6 +425,7 @@ struct EmptyChat: View {
 
 struct Composer: View {
     @EnvironmentObject var state: AppState
+    @Environment(\.fullGlass) private var fullGlass
     @Environment(InferenceStatusModel.self) private var inference
     @FocusState private var focused: Bool
     @State private var selection: TextSelection?
@@ -443,21 +449,18 @@ struct Composer: View {
                 .onSubmit { submit() }
                 .padding(.horizontal, 14).padding(.top, 13).padding(.bottom, 9)
             HStack(spacing: 6) {
-                Menu {
-                    Button { thinking = true } label: {
-                        if thinking { Label("Thinking", systemImage: "checkmark") } else { Text("Thinking") }
+                Button { thinking.toggle() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: thinking ? "brain" : "bolt").font(.system(size: 10, weight: .medium))
+                        Text(thinking ? "Thinking" : "No thinking")
                     }
-                    Button { thinking = false } label: {
-                        if !thinking { Label("No thinking", systemImage: "checkmark") } else { Text("No thinking") }
-                    }
-                } label: {
-                    HStack(spacing: 6) { Text(thinking ? "Thinking" : "No thinking"); Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)) }
-                        .font(LX.F.caption).foregroundStyle(LX.C.secondary)
-                        .padding(.horizontal, 8).frame(height: 24)
-                        .overlay(RoundedRectangle(cornerRadius: LX.R.sm).strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
+                    .font(LX.F.caption).foregroundStyle(thinking ? LX.C.accentText : LX.C.secondary)
+                    .padding(.horizontal, 8).frame(height: 24)
+                    .contentShape(Rectangle())
+                    .overlay(RoundedRectangle(cornerRadius: LX.R.sm).strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
                 }
-                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                .help("Reasoning mode for models that support it (e.g. Qwen3). Other models ignore it.")
+                .buttonStyle(.plain)
+                .help("Click to switch reasoning on or off for models that support it (e.g. Qwen3). Other models ignore it.")
                 Spacer()
                 contextMeter
                 if generating {
@@ -473,8 +476,8 @@ struct Composer: View {
         }
         .background {
             ZStack {
-                RoundedRectangle(cornerRadius: LX.R.xl).fill(.ultraThinMaterial)
-                RoundedRectangle(cornerRadius: LX.R.xl).fill(Color(hex: 0x080910, alpha: 0.6))
+                if !fullGlass { RoundedRectangle(cornerRadius: LX.R.xl).fill(.ultraThinMaterial) }
+                RoundedRectangle(cornerRadius: LX.R.xl).fill(Color(hex: 0x080910, alpha: fullGlass ? 0.3 : 0.6))
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: LX.R.xl))

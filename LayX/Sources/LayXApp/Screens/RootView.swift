@@ -116,8 +116,7 @@ struct Sidebar: View {
             let library = AppServices.shared.models
             libraryRow("shippingbox", "Installed", library.installed.isEmpty ? "" : "\(library.installed.count)", .installed)
             libraryRow("magnifyingglass", "Discover", "", .discover)
-            let pending = Set(library.activeDownloads.map(\.id)).union(library.incomplete.map(\.id)).count
-            libraryRow("arrow.down.to.line", "Downloads", pending == 0 ? "" : "\(pending)", .downloads)
+            libraryRow(library.activeDownloads.isEmpty ? "arrow.down.to.line" : "arrow.down.circle.fill", "Downloads", "", .downloads)
         case .performance:
             let perf = AppServices.shared.performance
             sectionHeader("Runs")

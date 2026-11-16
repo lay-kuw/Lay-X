@@ -172,23 +172,30 @@ public actor MLXEngine: InferenceEngine {
         if let rp = request.parameters.repetitionPenalty { parameters.repetitionPenalty = Float(rp) }
         let generateParameters = parameters
 
-        let pair: (AsyncStream<Generation>, Task<Void, Never>)
+        let pair: (AsyncStream<Generation>, Task<Void, Never>, Bool)
         do {
             pair = try await container.perform(nonSendable: lmInput) { context, input in
                 let iterator = try TokenIterator(
                     input: input, model: context.model, cache: nil, state: nil, parameters: generateParameters,
                     components: .init())
+                // Templates such as Qwen3.5/3.6 end the prompt with "<think>\n" when thinking is on, so the
+                // model's output starts inside the reasoning block without an opening tag.
+                let ids = input.text.tokens.asArray(Int.self)
+                let tail = context.tokenizer.decode(tokenIds: Array(ids.suffix(8)))
+                let opensThinking = tail.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("<think>")
                 let (s, t) = generateTask(
                     promptTokenCount: input.text.tokens.size, modelConfiguration: context.configuration,
                     tokenizer: context.tokenizer, iterator: iterator)
-                return GenerationHandle(stream: s, task: t)
-            }.pair
+                return GenerationHandle(stream: s, task: t, opensThinking: opensThinking)
+            }.triple
         } catch {
             continuation.finish(throwing: InferenceError.generationFailed(Self.describe(error)))
             return
         }
-        let (mlxStream, mlxTask) = pair
+        let (mlxStream, mlxTask, opensThinking) = pair
         generationTask = mlxTask
+        // Re-insert the opening tag the template already emitted, so every consumer sees a well-formed block.
+        if opensThinking { continuation.yield(.text("<think>\n")) }
 
         var firstToken: ContinuousClock.Instant?
         var info: GenerateCompletionInfo?
@@ -272,5 +279,6 @@ public actor MLXEngine: InferenceEngine {
 private struct GenerationHandle: Sendable {
     let stream: AsyncStream<Generation>
     let task: Task<Void, Never>
-    var pair: (AsyncStream<Generation>, Task<Void, Never>) { (stream, task) }
+    let opensThinking: Bool
+    var triple: (AsyncStream<Generation>, Task<Void, Never>, Bool) { (stream, task, opensThinking) }
 }

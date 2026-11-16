@@ -26,6 +26,19 @@ for b in "$BIN_DIR"/*.bundle; do
     cp -R "$b" "$APP/Contents/Resources/"
 done
 
+# App icon: Sources/LayXIcon/LX.png → AppIcon.icns
+ICON_SRC=Sources/LayXIcon/LX.png
+if [ -f "$ICON_SRC" ]; then
+    ICONSET=$(mktemp -d)/AppIcon.iconset
+    mkdir -p "$ICONSET"
+    for size in 16 32 128 256 512; do
+        sips -z $size $size "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+        sips -z $((size * 2)) $((size * 2)) "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+    done
+    iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+    rm -rf "$(dirname "$ICONSET")"
+fi
+
 codesign --force --sign - --options runtime --entitlements App/LayX.entitlements "$APP" >/dev/null
 echo "Built $(pwd)/$APP"
 

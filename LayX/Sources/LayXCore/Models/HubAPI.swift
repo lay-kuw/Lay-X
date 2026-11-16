@@ -11,6 +11,66 @@ public struct HubAPI: Sendable {
         self.session = session
     }
 
+    public enum Sort: String, Sendable, CaseIterable, Identifiable {
+        case trending = "trendingScore", downloads, likes, updated = "lastModified", newest = "createdAt"
+        public var id: String { rawValue }
+        public var title: String {
+            switch self {
+            case .trending: "Trending"
+            case .downloads: "Downloads"
+            case .likes: "Likes"
+            case .updated: "Updated"
+            case .newest: "Newest"
+            }
+        }
+    }
+
+    public struct Page: Sendable {
+        public var results: [HubModelSummary]
+        /// Next page (from the `Link: <…>; rel="next"` header), restricted to the Hub host.
+        public var next: URL?
+    }
+
+    /// One page of MLX models, sorted by `sort` (descending).
+    public func searchPage(_ query: String, author: String? = "mlx-community", sort: Sort = .trending, limit: Int = 50) async throws -> Page {
+        guard var c = URLComponents(url: endpoint.appendingPathComponent("api/models"), resolvingAgainstBaseURL: false) else {
+            throw ModelStoreError.network("invalid endpoint")
+        }
+        var items = [
+            URLQueryItem(name: "filter", value: "mlx"),
+            URLQueryItem(name: "sort", value: sort.rawValue),
+            URLQueryItem(name: "direction", value: "-1"),
+            URLQueryItem(name: "limit", value: String(min(max(limit, 1), 100))),
+        ]
+        if let author { items.append(URLQueryItem(name: "author", value: author)) }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { items.append(URLQueryItem(name: "search", value: String(trimmed.prefix(100)))) }
+        for e in ["config", "downloads", "likes", "trendingScore", "lastModified", "library_name", "pipeline_tag", "tags", "safetensors"] {
+            items.append(URLQueryItem(name: "expand[]", value: e))
+        }
+        c.queryItems = items
+        guard let url = c.url else { throw ModelStoreError.network("invalid search query") }
+        return try await page(at: url)
+    }
+
+    /// Fetches a page by URL (first page or a `next` link).
+    public func page(at url: URL) async throws -> Page {
+        guard url.host == endpoint.host else { throw ModelStoreError.network("unexpected host") }
+        let (data, response) = try await getWithResponse(url)
+        let next = Self.nextLink(response.value(forHTTPHeaderField: "Link")).flatMap { $0.host == endpoint.host ? $0 : nil }
+        return Page(results: try Self.parseSearch(data), next: next)
+    }
+
+    static func nextLink(_ header: String?) -> URL? {
+        guard let header else { return nil }
+        for part in header.split(separator: ",") where part.contains("rel=\"next\"") {
+            if let open = part.firstIndex(of: "<"), let close = part.firstIndex(of: ">"), open < close {
+                return URL(string: String(part[part.index(after: open)..<close]))
+            }
+        }
+        return nil
+    }
+
     /// Searches MLX conversions. `author` defaults to `mlx-community`, the established source of MLX weights.
     public func search(_ query: String, author: String? = "mlx-community", limit: Int = 40) async throws -> [HubModelSummary] {
         guard var c = URLComponents(url: endpoint.appendingPathComponent("api/models"), resolvingAgainstBaseURL: false) else {
@@ -55,6 +115,20 @@ public struct HubAPI: Sendable {
         return url
     }
 
+    private func getWithResponse(_ url: URL) async throws -> (Data, HTTPURLResponse) {
+        var request = URLRequest(url: url, timeoutInterval: 30)
+        request.setValue("LayX", forHTTPHeaderField: "User-Agent")
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw ModelStoreError.network(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else { throw ModelStoreError.http(status: 0) }
+        guard (200..<300).contains(http.statusCode) else { throw ModelStoreError.http(status: http.statusCode) }
+        return (data, http)
+    }
+
     private func get(_ url: URL) async throws -> Data {
         var request = URLRequest(url: url, timeoutInterval: 30)
         request.setValue("LayX", forHTTPHeaderField: "User-Agent")
@@ -87,7 +161,9 @@ public struct HubAPI: Sendable {
                 lastModified: (item["lastModified"] as? String).flatMap { iso.date(from: $0) },
                 tags: item["tags"] as? [String] ?? [],
                 libraryName: item["library_name"] as? String,
-                pipelineTag: item["pipeline_tag"] as? String)
+                pipelineTag: item["pipeline_tag"] as? String,
+                likes: item["likes"] as? Int ?? 0,
+                trendingScore: item["trendingScore"] as? Int ?? 0)
         }
     }
 
