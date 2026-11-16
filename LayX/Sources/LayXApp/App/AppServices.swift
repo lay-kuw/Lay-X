@@ -20,6 +20,7 @@ final class AppServices {
     let chats: ChatSessionStore
     let work = WorkProjects()
     let performance: PerformanceModel
+    private(set) var api: APIServerModel!
     private var memoryPressure: DispatchSourceMemoryPressure?
 
     static let modelStorePathKey = "lx.modelStorePath"
@@ -65,6 +66,7 @@ final class AppServices {
         Task { await chats.loadPinned() }
         startMemoryPressureMonitor()
         inferenceStatus.startMemoryPolling(coordinator)
+        api = APIServerModel(coordinator: coordinator, models: library)
     }
 
     /// The model used when a chat needs one and none is loaded: the configured default if installed, else the

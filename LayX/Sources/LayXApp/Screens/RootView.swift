@@ -131,9 +131,11 @@ struct Sidebar: View {
                 Text("No runs yet").font(LX.F.caption).foregroundStyle(LX.C.tertiary).padding(.horizontal, 8)
             }
         case .api:
+            let api = AppServices.shared.api!
             sectionHeader("Endpoints")
-            ForEach(Self.endpoints.indices, id: \.self) { i in
-                ListRow(symbol: nil, title: Self.endpoints[i].path, meta: Self.endpoints[i].count, mono: true)
+            ForEach(["/v1/chat/completions", "/v1/models"], id: \.self) { path in
+                let n = api.count(path: path)
+                ListRow(symbol: nil, title: path, meta: n == 0 ? "" : (n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)"), mono: true)
             }
         case .settings:
             sectionHeader("Settings")
@@ -170,9 +172,6 @@ struct Sidebar: View {
             .onTapGesture { state.modelsTab = tab }
     }
 
-    private static let endpoints: [(path: String, count: String)] = [
-        ("/v1/chat/completions", "1.2k"), ("/v1/completions", "84"), ("/v1/embeddings", "310"), ("/v1/models", "42"),
-    ]
 
     private func sectionHeader(_ title: String, note: String? = nil) -> some View {
         SectionLabel(text: title, trailing: note)
@@ -195,8 +194,8 @@ struct NavRow: View {
                     .foregroundStyle(selected ? LX.C.accentText : LX.C.secondary)
                 Text(screen.title).font(LX.F.body)
                 Spacer()
-                if screen == .api {
-                    HStack(spacing: 6) { LiveDot(); Text(":1234").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan) }
+                if screen == .api, let api = AppServices.shared.api, api.isRunning {
+                    HStack(spacing: 6) { LiveDot(); Text(":\(api.port)").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan) }
                 }
             }
             .foregroundStyle(selected ? Color.white : Color(hex: 0xC9CBD6))

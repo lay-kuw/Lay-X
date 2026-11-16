@@ -2,6 +2,7 @@
 import Foundation
 import LayXCore
 import LayXMLX
+import LayXServer
 
 /// Headless developer/verification commands (no UI). Run from inside the app bundle:
 ///   LayX.app/Contents/MacOS/LayX --mlx-selftest
@@ -16,7 +17,7 @@ nonisolated enum CommandLineTools {
         case "--mlx-selftest":
             print("mlx-selftest: \(MLXSelfTest.run())")
             exit(0)
-        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark":
+        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check":
             Task.detached {
                 do {
                     try await run(args)
@@ -33,7 +34,7 @@ nonisolated enum CommandLineTools {
     }
 
     /// Commands handled headlessly; anything else starts the GUI.
-    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark"]
+    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check"]
 
     private static func run(_ args: [String]) async throws {
         let store = ModelStore(root: try ModelStore.defaultRoot())
@@ -110,6 +111,38 @@ nonisolated enum CommandLineTools {
             let db = try SQLiteDatabase(location: .file(try LayXSchema.defaultURL()), migrations: LayXSchema.migrations)
             try await BenchmarkStore(database: db).save(result)
             print("  saved run \(result.id)")
+        case "--serve":
+            // LayX --serve <model> <port> [lan] — headless API server on real MLX (for verification).
+            guard args.count >= 4, let id = ModelRepoID(args[2]), let model = store.installedModel(id), let port = Int(args[3]) else {
+                throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "")
+            }
+            let coordinator = InferenceCoordinator(engine: MLXEngine())
+            try await coordinator.load(model.reference)
+            let keys = InMemoryAPIKeyStore()
+            let lan = args.count >= 5 && args[4] == "lan"
+            if lan {
+                let (secret, _) = try APIKeys.create(name: "cli", in: keys)
+                print("key: \(secret)")
+            }
+            let deps = APIServerDependencies(
+                coordinator: coordinator, installedModels: { [id.description] }, loadModel: { _ in }, defaultModel: { id.description },
+                keys: keys,
+                log: { r in print("log: \(r.method) \(r.path) \(r.status) \(r.stream ? "stream " : "")\(String(format: "%.0f", r.durationMs))ms tokens=\(r.completionTokens ?? 0) client=\(r.client) ua=\(r.userAgent ?? "-")") })
+            let server = APIServerController(deps: deps)
+            await server.start(APIServerConfiguration(exposure: lan ? .lan : .localhost, port: port))
+            for await s in await server.updates() {
+                print("status: \(s)")
+                if case .failed = s { exit(1) }
+            }
+        case "--keychain-check":
+            let store = KeychainAPIKeyStore()
+            let before = try store.all().count
+            let (secret, record) = try APIKeys.create(name: "keychain-check", in: store)
+            let listed = try store.all()
+            print("created; listed \(listed.count) (was \(before)); secret stored: \(listed.contains { $0.hash.contains(secret) || $0.prefix == secret })")
+            print("verify ok: \(APIKeys.verify(secret, in: listed)?.id == record.id)")
+            try store.remove(id: record.id)
+            print("removed; now \(try store.all().count)")
         case "--search":
             let support = MLXArchitectureSupport()
             for r in try await HubAPI().search(args.count >= 3 ? args[2] : "", limit: 12) {

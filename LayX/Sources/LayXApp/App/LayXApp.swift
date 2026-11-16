@@ -74,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chats.cancelAll()
         Task { @MainActor in
             await chats.flushWrites()
+            await AppServices.shared.api.shutdown()
             await AppServices.shared.coordinator.unload()
             sender.reply(toApplicationShouldTerminate: true)
         }

@@ -16,6 +16,7 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", exact: "3.32.3", traits: []),
         .package(url: "https://github.com/huggingface/swift-transformers", exact: "1.4.0"),
         .package(url: "https://github.com/hummingbird-project/hummingbird", exact: "2.28.1"),
+        .package(url: "https://github.com/apple/swift-log", exact: "1.17.0"),
     ],
     targets: [
         // UI-free domain + services. No third-party dependencies, fully unit-testable.
@@ -29,6 +30,7 @@ let package = Package(
             dependencies: [
                 "LayXCore",
                 .product(name: "Hummingbird", package: "hummingbird"),
+                .product(name: "Logging", package: "swift-log"),
             ]
         ),
         // MLX inference engine. Isolated so the rest of the app and the tests depend only on `InferenceEngine`.
