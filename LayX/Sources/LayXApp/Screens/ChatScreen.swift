@@ -393,9 +393,7 @@ struct MarkdownView: View {
 
 struct EmptyChat: View {
     @EnvironmentObject var state: AppState
-    @State private var hovered: Int? = 0
     private var library: ModelLibrary { AppServices.shared.models }
-    private static let suggestions = ["Explain a Swift concurrency bug", "議事録を3行で要約", "Draft a release note"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -412,25 +410,6 @@ struct EmptyChat: View {
                     state.modelsTab = .discover
                     state.screen = .models
                 }
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(Self.suggestions.enumerated()), id: \.offset) { i, s in
-                        Button { state.send(s) } label: {
-                            HStack {
-                                Text(s).font(LX.F.body).foregroundStyle(hovered == i ? Color.white : Color(hex: 0xC9CBD6))
-                                Spacer()
-                            }
-                            .padding(.horizontal, 10).frame(height: 34)
-                            .background(RoundedRectangle(cornerRadius: LX.R.md).fill(LX.C.accent.opacity(hovered == i ? 0.12 : 0)))
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .option)
-                        .onHover { if $0 { hovered = i } }
-                    }
-                }
-                .padding(4)
-                .well(radius: 10, fill: Color.black.opacity(0.25))
             }
         }
         .frame(width: 520)

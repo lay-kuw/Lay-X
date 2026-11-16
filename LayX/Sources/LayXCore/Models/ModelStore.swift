@@ -21,25 +21,15 @@ public struct ModelStore: Sendable {
     }
 
     public static let partialDirectoryName = ".partial"
-    public static let storeMarker = ".layx-store"
-
-    /// Turns a user-chosen folder into a store root. The folder is used directly when it is empty or already a
-    /// Lay X store; otherwise a "Lay X Models" subfolder is created, so Lay X never mixes its files with the
-    /// user's. A marker file identifies the folder as a Lay X store.
+    /// Uses a user-chosen folder as the store root as-is (no subfolder, no marker files).
+    /// Lay X only ever creates or deletes `<owner>/<name>` model folders inside it.
     public static func root(forChosenFolder chosen: URL) throws -> URL {
-        let fm = FileManager.default
-        let chosen = chosen.standardizedFileURL
-        let contents = try fm.contentsOfDirectory(atPath: chosen.path).filter { $0 != ".DS_Store" }
-        let root = (contents.isEmpty || contents.contains(storeMarker))
-            ? chosen : chosen.appendingPathComponent("Lay X Models", isDirectory: true)
-        try fm.createDirectory(at: root, withIntermediateDirectories: true)
-        let marker = root.appendingPathComponent(storeMarker)
-        if !fm.fileExists(atPath: marker.path) {
-            try Data("Lay X model storage. Lay X only creates and deletes files in owner/name folders here.\n".utf8)
-                .write(to: marker)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: chosen.path, isDirectory: &isDir), isDir.boolValue else {
+            throw CocoaError(.fileNoSuchFile)
         }
-        guard fm.isWritableFile(atPath: root.path) else { throw CocoaError(.fileWriteNoPermission) }
-        return root
+        guard FileManager.default.isWritableFile(atPath: chosen.path) else { throw CocoaError(.fileWriteNoPermission) }
+        return URL(fileURLWithPath: canonicalPath(chosen), isDirectory: true)
     }
 
     // MARK: Paths
@@ -105,13 +95,16 @@ public struct ModelStore: Sendable {
         for owner in owners where ModelRepoID.isValidComponent(owner.lastPathComponent) {
             guard let names = try? fm.contentsOfDirectory(at: owner, includingPropertiesForKeys: nil) else { continue }
             for dir in names {
-                guard let id = ModelRepoID("\(owner.lastPathComponent)/\(dir.lastPathComponent)"),
-                      let data = try? Data(contentsOf: dir.appendingPathComponent(InstalledModelManifest.fileName)),
-                      let manifest = try? decoder.decode(InstalledModelManifest.self, from: data),
-                      manifest.id == id
-                else { continue }
-                result.append(InstalledModel(manifest: manifest, directory: directory(for: id),
-                                             diskBytes: Self.allocatedSize(of: dir)))
+                guard let id = ModelRepoID("\(owner.lastPathComponent)/\(dir.lastPathComponent)") else { continue }
+                if let data = try? Data(contentsOf: dir.appendingPathComponent(InstalledModelManifest.fileName)),
+                   let manifest = try? decoder.decode(InstalledModelManifest.self, from: data), manifest.id == id {
+                    result.append(InstalledModel(manifest: manifest, directory: directory(for: id),
+                                                 diskBytes: Self.allocatedSize(of: dir)))
+                } else if let manifest = Self.inferManifest(id: id, directory: dir) {
+                    // A model folder placed here by the user (no Lay X manifest): referenced read-only.
+                    result.append(InstalledModel(manifest: manifest, directory: directory(for: id),
+                                                 diskBytes: Self.allocatedSize(of: dir)))
+                }
             }
         }
         return result.sorted { $0.id < $1.id }
@@ -119,6 +112,25 @@ public struct ModelStore: Sendable {
 
     public func installedModel(_ id: ModelRepoID) -> InstalledModel? {
         installedModels().first { $0.id == id }
+    }
+
+    /// Builds an in-memory manifest for a complete model folder without one (config.json + *.safetensors,
+    /// no unfinished download). Nothing is written.
+    static func inferManifest(id: ModelRepoID, directory dir: URL) -> InstalledModelManifest? {
+        let fm = FileManager.default
+        guard !fm.fileExists(atPath: dir.appendingPathComponent(partialDirectoryName).path),
+              fm.fileExists(atPath: dir.appendingPathComponent("config.json").path),
+              let names = try? fm.contentsOfDirectory(atPath: dir.path),
+              names.contains(where: { $0.hasSuffix(".safetensors") })
+        else { return nil }
+        let files = names.filter { !$0.hasPrefix(".") }.map { name -> HubFile in
+            let size = (try? fm.attributesOfItem(atPath: dir.appendingPathComponent(name).path)[.size] as? NSNumber)?.int64Value ?? 0
+            return HubFile(path: name, size: size, sha256: nil)
+        }
+        let config = readConfig(at: dir)
+        let date = (try? fm.attributesOfItem(atPath: dir.path)[.modificationDate] as? Date) ?? Date()
+        return InstalledModelManifest(id: id, revision: "local", files: files, downloadedAt: date, modelType: config.modelType,
+                                      quantizationBits: config.bits, contextLength: config.context)
     }
 
     /// Models with a `.partial` directory and no manifest (interrupted downloads that can be resumed).

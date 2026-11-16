@@ -24,6 +24,20 @@ import Testing
         #expect(try await reopened.query("SELECT value FROM app_meta WHERE key = 'k'").first?["value"].text == "v")
     }
 
+    @Test func moveCopiesDataAndRemovesOldFiles() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("layx-move-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let old = dir.appendingPathComponent("a/LayX.sqlite"), new = dir.appendingPathComponent("b/LayX.sqlite")
+        try FileManager.default.createDirectory(at: new.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let db = try SQLiteDatabase(location: .file(old), migrations: LayXSchema.migrations)
+        try await PinnedChatRepository(database: db).save(ChatSession(title: "Keep", messages: [ChatMessage(role: .user, content: "hi")], isPinned: true, pinnedAt: Date()))
+        try await LayXSchema.move(db, from: old, to: new)
+        #expect(!FileManager.default.fileExists(atPath: old.path))
+        #expect(!FileManager.default.fileExists(atPath: old.path + "-wal"))
+        let reopened = try SQLiteDatabase(location: .file(new), migrations: LayXSchema.migrations)
+        #expect(try await PinnedChatRepository(database: reopened).loadAll().first?.title == "Keep")
+    }
+
     @Test func failingMigrationRollsBack() async throws {
         let bad = LayXSchema.migrations + [Migration(version: 2, sql: "CREATE TABLE x (a); THIS IS NOT SQL;")]
         #expect(throws: DatabaseError.self) { try SQLiteDatabase(location: .inMemory, migrations: bad) }

@@ -142,7 +142,9 @@ struct MiniChatView: View {
     @AppStorage(LX.Glass.storageKey) private var storedTransparency = LX.Glass.defaultValue
     @AppStorage(AppearancePreferences.followReduceTransparencyKey) private var followReduce = true
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage(LX.Glass.fullGlassKey) private var fullGlass = false
     private var transparency: Double { followReduce && reduceTransparency ? 0 : storedTransparency }
+    private var miniTint: Double { LX.Glass.tintScale(transparency) * (fullGlass && !(followReduce && reduceTransparency) ? LX.Glass.fullGlassScale : 1) }
     @FocusState private var focused: Bool
     @State private var selection: TextSelection?
 
@@ -214,7 +216,7 @@ struct MiniChatView: View {
         .background {
             ZStack {
                 VisualEffectBlur(material: .hudWindow, blending: .behindWindow)
-                LX.C.mini.opacity(LX.Glass.tintScale(transparency))
+                LX.C.mini.opacity(miniTint)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: LX.R.window, style: .continuous))

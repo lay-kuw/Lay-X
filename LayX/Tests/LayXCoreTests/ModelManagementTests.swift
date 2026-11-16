@@ -266,22 +266,32 @@ struct FixedArchitectures: ModelArchitectureSupport {
         return u
     }
 
-    @Test func emptyFolderIsUsedDirectly() throws {
-        let dir = try tmp(); defer { try? FileManager.default.removeItem(at: dir) }
-        let root = try ModelStore.root(forChosenFolder: dir)
-        #expect(root.standardizedFileURL.path == dir.standardizedFileURL.path)
-        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent(ModelStore.storeMarker).path))
-    }
-
-    @Test func nonEmptyFolderGetsSubfolder() throws {
+    @Test func chosenFolderIsUsedAsIsWithoutCreatingAnything() throws {
         let dir = try tmp(); defer { try? FileManager.default.removeItem(at: dir) }
         try Data("mine".utf8).write(to: dir.appendingPathComponent("notes.txt"))
         let root = try ModelStore.root(forChosenFolder: dir)
-        #expect(root.lastPathComponent == "Lay X Models")
-        // Choosing the same folder again reuses the subfolder; choosing the store itself uses it directly.
-        #expect(try ModelStore.root(forChosenFolder: dir) == root)
-        #expect(try ModelStore.root(forChosenFolder: root).standardizedFileURL.path == root.standardizedFileURL.path)
-        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("notes.txt").path))
+        #expect(root.path == ModelStore.canonicalPath(dir))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["notes.txt"])
+    }
+
+    @Test func missingFolderIsRejected() {
+        #expect(throws: (any Error).self) { try ModelStore.root(forChosenFolder: URL(fileURLWithPath: "/nonexistent-\(UUID())")) }
+    }
+
+    @Test func existingModelFoldersWithoutManifestAreListed() throws {
+        let dir = try tmp(); defer { try? FileManager.default.removeItem(at: dir) }
+        let model = dir.appendingPathComponent("mlx-community/Existing-4bit")
+        try FileManager.default.createDirectory(at: model, withIntermediateDirectories: true)
+        try Data(#"{"model_type":"qwen3","max_position_embeddings":8192}"#.utf8).write(to: model.appendingPathComponent("config.json"))
+        try Data([1, 2, 3]).write(to: model.appendingPathComponent("model.safetensors"))
+        // Not a model: no weights.
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("someone/notes"), withIntermediateDirectories: true)
+        let store = ModelStore(root: try ModelStore.root(forChosenFolder: dir))
+        let installed = store.installedModels()
+        #expect(installed.map(\.id.description) == ["mlx-community/Existing-4bit"])
+        #expect(installed.first?.manifest.revision == "local")
+        #expect(installed.first?.manifest.contextLength == 8192)
+        #expect(!FileManager.default.fileExists(atPath: model.appendingPathComponent(InstalledModelManifest.fileName).path))
     }
 }
 

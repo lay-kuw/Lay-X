@@ -101,6 +101,19 @@ struct GeneralSettings: View {
 struct PrivacySettings: View {
     let screen: SettingsScreen
     @State private var confirmDeleteAll = false
+    @State private var databaseMessage: String?
+
+    private func chooseDatabaseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Use for Database"
+        panel.message = "Lay X keeps LayX.sqlite (pinned chats, benchmark results) directly in this folder."
+        if let url = try? AppServices.databaseURL() { panel.directoryURL = url.deletingLastPathComponent() }
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        Task { databaseMessage = await AppServices.shared.changeDatabaseLocation(to: folder) }
+    }
     private var chats: ChatSessionStore { AppServices.shared.chats }
 
     var body: some View {
@@ -137,14 +150,24 @@ struct PrivacySettings: View {
                 Text(error).font(LX.F.caption).foregroundStyle(LX.C.error)
             }
             screen.group("Storage") {
-                screen.row("Database", "Pinned chats and benchmark results") {
+                screen.row("Database", "Pinned chats and benchmark results. Choosing a folder moves the database there (or uses one already there)") {
                     HStack(spacing: 8) {
-                        Text("~/Library/Application Support/Lay X").font(LX.F.mono(11.5)).foregroundStyle(LX.C.accentText)
-                        LXButton(title: "Show") {
-                            if let url = try? LayXSchema.defaultURL() { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                        let url = try? AppServices.databaseURL()
+                        Text(((url?.deletingLastPathComponent().path ?? "—") as NSString).abbreviatingWithTildeInPath)
+                            .font(LX.F.mono(11.5)).foregroundStyle(LX.C.accentText)
+                            .lineLimit(1).truncationMode(.middle).frame(maxWidth: 220, alignment: .trailing)
+                            .help(url?.path ?? "")
+                            .onTapGesture { if let url { NSWorkspace.shared.activateFileViewerSelecting([url]) } }
+                        LXButton(title: "Choose…") { chooseDatabaseFolder() }
+                        if !AppServices.shared.isDefaultDatabaseLocation {
+                            LXButton(title: "Default") { Task { databaseMessage = await AppServices.shared.changeDatabaseLocation(to: nil) } }
                         }
                     }
+                    .id(databaseMessage)
                 }
+            }
+            if let databaseMessage {
+                Text(databaseMessage).font(LX.F.caption).foregroundStyle(LX.C.secondary)
             }
         }
         .confirmationDialog("Delete all pinned chats?", isPresented: $confirmDeleteAll) {

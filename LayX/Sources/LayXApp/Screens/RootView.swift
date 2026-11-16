@@ -6,6 +6,7 @@ struct RootView: View {
     @EnvironmentObject var state: AppState
     @AppStorage(LX.Glass.storageKey) private var transparency = LX.Glass.defaultValue
     @AppStorage(AppearancePreferences.followReduceTransparencyKey) private var followReduce = true
+    @AppStorage(LX.Glass.fullGlassKey) private var fullGlass = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage(LX.Glow.storageKey) private var glowRaw = LX.Glow.violet.rawValue
 
@@ -29,6 +30,7 @@ struct RootView: View {
         }
         .foregroundStyle(LX.C.primary)
         .environment(\.glassTransparency, followReduce && reduceTransparency ? 0 : transparency)
+        .environment(\.fullGlass, fullGlass && !(followReduce && reduceTransparency))
         .environment(\.glowPreset, LX.Glow(rawValue: glowRaw) ?? .violet)
         .animation(.easeInOut(duration: 0.35), value: glowRaw)
         .ignoresSafeArea()

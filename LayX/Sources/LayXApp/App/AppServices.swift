@@ -13,9 +13,9 @@ final class AppServices {
     let coordinator: InferenceCoordinator
     let inferenceStatus: InferenceStatusModel
     /// `nil` when the database could not be opened; pinning then reports an error instead of silently failing.
-    let database: SQLiteDatabase?
-    let databaseError: String?
-    let pinnedChats: (any PinnedChatStoring)?
+    private(set) var database: SQLiteDatabase?
+    private(set) var databaseError: String?
+    private(set) var pinnedChats: (any PinnedChatStoring)?
     let models: ModelLibrary
     let chats: ChatSessionStore
     let work = WorkProjects()
@@ -27,6 +27,70 @@ final class AppServices {
     private var idleTask: Task<Void, Never>?
 
     static let modelStorePathKey = "lx.modelStorePath"
+    static let databaseFolderKey = "lx.databaseFolder"
+
+    /// `<chosen folder>/LayX.sqlite`, or `~/Library/Application Support/Lay X/LayX.sqlite` by default.
+    static func databaseURL() throws -> URL {
+        if let folder = UserDefaults.standard.string(forKey: databaseFolderKey) {
+            return URL(fileURLWithPath: folder, isDirectory: true).appendingPathComponent(LayXSchema.fileName)
+        }
+        return try LayXSchema.defaultURL()
+    }
+
+    var isDefaultDatabaseLocation: Bool { UserDefaults.standard.string(forKey: Self.databaseFolderKey) == nil }
+
+    /// Moves (or switches) the database to `folder` (nil = default location), live.
+    /// - No database there yet → the current one is moved (copied, then the old files are deleted).
+    /// - A Lay X database already there → it is used; the current file is left where it was.
+    /// Returns a user-facing message.
+    func changeDatabaseLocation(to folder: URL?) async -> String {
+        guard chats.generating.isEmpty else { return "Wait for replies to finish before moving the database." }
+        let newURL: URL
+        do {
+            if let folder {
+                let root = try ModelStore.root(forChosenFolder: folder)
+                newURL = root.appendingPathComponent(LayXSchema.fileName)
+            } else {
+                newURL = try LayXSchema.defaultURL()
+            }
+        } catch {
+            return "That folder can’t be used: \(error.localizedDescription)"
+        }
+        guard let oldURL = try? Self.databaseURL(), newURL.standardizedFileURL != oldURL.standardizedFileURL else {
+            return "The database is already there."
+        }
+        var message: String
+        do {
+            await chats.flushWrites()
+            if FileManager.default.fileExists(atPath: newURL.path) {
+                message = "Now using the existing database in \((newURL.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath). The previous file was left in place."
+                await database?.close()
+            } else {
+                if let db = database {
+                    try await LayXSchema.move(db, from: oldURL, to: newURL)
+                }
+                message = "Database moved to \((newURL.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath)."
+            }
+            let db = try SQLiteDatabase(location: .file(newURL), migrations: LayXSchema.migrations)
+            if let folder { UserDefaults.standard.set(ModelStore.canonicalPath(folder), forKey: Self.databaseFolderKey) }
+            else { UserDefaults.standard.removeObject(forKey: Self.databaseFolderKey) }
+            database = db
+            databaseError = nil
+            pinnedChats = PinnedChatRepository(database: db)
+            await chats.replaceRepository(pinnedChats)
+            await performance.replaceStore(BenchmarkStore(database: db))
+        } catch {
+            // Fall back to whatever is at the old location so pinning keeps working.
+            if let db = try? SQLiteDatabase(location: .file(oldURL), migrations: LayXSchema.migrations) {
+                database = db
+                pinnedChats = PinnedChatRepository(database: db)
+                await chats.replaceRepository(pinnedChats)
+                await performance.replaceStore(BenchmarkStore(database: db))
+            }
+            message = "The database couldn’t be moved: \(error.localizedDescription). Lay X is still using the previous location."
+        }
+        return message
+    }
 
     private init() {
         #if canImport(LayXMLX)
@@ -46,7 +110,7 @@ final class AppServices {
         models = library
 
         do {
-            let db = try SQLiteDatabase(location: .file(try LayXSchema.defaultURL()), migrations: LayXSchema.migrations)
+            let db = try SQLiteDatabase(location: .file(try Self.databaseURL()), migrations: LayXSchema.migrations)
             database = db
             databaseError = nil
             pinnedChats = PinnedChatRepository(database: db)

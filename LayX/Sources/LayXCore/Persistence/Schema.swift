@@ -36,6 +36,19 @@ public enum LayXSchema {
             """),
     ]
 
+    public static let fileName = "LayX.sqlite"
+
+    /// Moves the database to `newURL`: consistent copy (`VACUUM INTO`), then the old file and its WAL/SHM
+    /// side files are deleted so pinned-chat content isn't left behind. The caller must stop using `db`.
+    public static func move(_ db: SQLiteDatabase, from oldURL: URL, to newURL: URL) async throws {
+        guard !FileManager.default.fileExists(atPath: newURL.path) else { throw CocoaError(.fileWriteFileExists) }
+        try await db.copy(to: newURL)
+        await db.close()
+        for suffix in ["", "-wal", "-shm"] {
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: oldURL.path + suffix))
+        }
+    }
+
     /// `~/Library/Application Support/Lay X/LayX.sqlite`
     public static func defaultURL() throws -> URL {
         let base = try FileManager.default.url(

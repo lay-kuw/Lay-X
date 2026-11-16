@@ -110,6 +110,24 @@ actor RecordingRepository: PinnedChatStoring {
         #expect(store.temporarySessions.isEmpty)
     }
 
+    @Test func replacingRepositorySwapsPinnedButKeepsTemporary() async throws {
+        let (store, _, _) = try await make()
+        let temp = store.newSession()
+        store.send("temp", in: temp)
+        try await waitIdle(store)
+        let pinned = store.newSession()
+        store.send("pinned", in: pinned)
+        try await waitIdle(store)
+        store.setPinned(pinned, true)
+        let other = RecordingRepository()
+        let foreign = ChatSession(title: "From other DB", messages: [ChatMessage(role: .user, content: "x")], isPinned: true, pinnedAt: Date())
+        await other.preload(foreign)
+        await store.replaceRepository(other)
+        #expect(store.pinnedSessions.map(\.id) == [foreign.id])
+        #expect(store.session(temp) != nil)
+        #expect(store.session(pinned) == nil)
+    }
+
     @Test func sessionSwitchingKeepsIndependentHistories() async throws {
         let (store, _, _) = try await make()
         let a = store.newSession()

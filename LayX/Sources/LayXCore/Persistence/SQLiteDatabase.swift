@@ -141,6 +141,11 @@ public actor SQLiteDatabase {
         }
     }
 
+    /// Writes a compact, consistent copy of the whole database to `url` (must not exist).
+    public func copy(to url: URL) throws {
+        try execute("VACUUM INTO ?", [.text(url.path)])
+    }
+
     public func userVersion() throws -> Int {
         Int(try query("PRAGMA user_version;").first?["user_version"].int ?? 0)
     }

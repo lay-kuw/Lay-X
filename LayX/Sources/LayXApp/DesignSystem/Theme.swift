@@ -70,6 +70,9 @@ enum LX {
         static let defaultValue = 0.5
         /// Multiplier for pane / panel tints. 1.0 at the default.
         static func tintScale(_ t: Double) -> Double { 1.6 - 1.2 * t }
+        /// Full-glass mode multiplies base and pane tints by this (text stays on blurred, still-dark glass).
+        static let fullGlassScale = 0.5
+        static let fullGlassKey = "lx.fullGlass"
         /// Opacity of the dark base over the wallpaper blur.
         static func baseOpacity(_ t: Double) -> Double { 0.97 - 0.17 * t - 0.5 * t * t }
     }

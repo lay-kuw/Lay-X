@@ -99,6 +99,7 @@ struct WorkProjectView: View {
             }
         }
         .animation(LX.M.panel, value: session.notice)
+        .animation(LX.M.panel, value: changes.isEmpty)
         .onChange(of: session.focusPath) { loadPreview() }
         .onChange(of: session.changeSet) { loadPreview() }
         .onAppear { loadPreview() }
@@ -202,6 +203,7 @@ struct WorkProjectView: View {
             .padding(.horizontal, 14).frame(height: 40)
             Rectangle().fill(LX.C.divider).frame(height: 1)
 
+            GeometryReader { geo in
             ScrollView([.vertical, .horizontal]) {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if let c = focusedChange {
@@ -221,25 +223,31 @@ struct WorkProjectView: View {
                     }
                 }
                 .padding(.vertical, 10)
+                // A 2-axis scroll view centres content narrower than itself; pin it to the leading edge.
+                .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .topLeading)
+            }
+            .defaultScrollAnchor(.topLeading)
             }
 
-            Rectangle().fill(LX.C.divider).frame(height: 1)
-            HStack(spacing: 8) {
-                Text(changes.isEmpty ? "No proposal · no file is written until you apply"
-                     : "\(selectedCount) of \(changes.count) selected · no file is written until you apply")
-                    .font(LX.F.ui(12)).foregroundStyle(LX.C.secondary).lineLimit(1)
-                Spacer()
-                LXButton(title: "Reject all", kind: .danger) { session.reject() }
-                    .keyboardShortcut(.delete, modifiers: .command)
-                    .disabled(changes.isEmpty || session.phase == .applying)
-                LXButton(title: "Apply \(selectedCount) change\(selectedCount == 1 ? "" : "s")", symbol: "checkmark", kind: .primary) {
-                    session.apply()
+            if !changes.isEmpty {
+                Rectangle().fill(LX.C.divider).frame(height: 1)
+                HStack(spacing: 8) {
+                    Text("\(selectedCount) of \(changes.count) selected · no file is written until you apply")
+                        .font(LX.F.ui(12)).foregroundStyle(LX.C.secondary).lineLimit(1)
+                    Spacer()
+                    LXButton(title: "Reject all", kind: .danger) { session.reject() }
+                        .keyboardShortcut(.delete, modifiers: .command)
+                        .disabled(session.phase == .applying)
+                    LXButton(title: "Apply \(selectedCount) change\(selectedCount == 1 ? "" : "s")", symbol: "checkmark", kind: .primary) {
+                        session.apply()
+                    }
+                    .keyboardShortcut(.return, modifiers: [.command, .shift])
+                    .disabled(selectedCount == 0 || session.phase != .proposed)
                 }
-                .keyboardShortcut(.return, modifiers: [.command, .shift])
-                .disabled(selectedCount == 0 || session.phase != .proposed)
+                .padding(.horizontal, 14).frame(height: 52)
+                .background(Color.black.opacity(0.15))
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .padding(.horizontal, 14).frame(height: 52)
-            .background(Color.black.opacity(0.15))
         }
     }
 
@@ -253,6 +261,13 @@ struct WorkProjectView: View {
 
     private var assistant: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                SectionLabel(text: "Conversation")
+                Spacer()
+                IconButton(symbol: "trash", help: "Clear conversation") { session.clearConversation() }
+                    .disabled(session.turns.isEmpty && !busy)
+            }
+            .padding(.leading, 14).padding(.trailing, 8).padding(.top, 8)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(session.turns) { turn in

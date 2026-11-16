@@ -261,6 +261,21 @@ struct TempProject {
         #expect(session.phase == .idle)
     }
 
+    @Test func clearConversationKeepsPendingProposal() async throws {
+        let p = try TempProject(files: ["a.txt": "1\n"]); defer { p.remove() }
+        let engine = ScriptedEngine(tokens: ["Edit.\n", "<<<FILE a.txt\n", "2\n", "FILE>>>\n"], tokenDelay: .milliseconds(1))
+        let coordinator = InferenceCoordinator(engine: engine)
+        try await coordinator.load(ModelReference(id: "t/m", directory: p.root))
+        let session = WorkSession(workspace: try Workspace(root: p.root), coordinator: coordinator, prepareModel: { throw InferenceError.noModelLoaded })
+        session.propose("change a")
+        for _ in 0..<200 where session.phase != .proposed { try await Task.sleep(for: .milliseconds(5)) }
+        session.clearConversation()
+        #expect(session.turns.isEmpty)
+        #expect(session.phase == .proposed)
+        #expect(session.changeSet?.changes.count == 1)
+        #expect(p.read("a.txt") == "1\n")
+    }
+
     @Test func contextSelectionPrefersMentionsAndRespectsBudget() throws {
         let p = try TempProject(files: ["Sources/ChatView.swift": String(repeating: "x", count: 900),
                                         "Sources/Other.swift": "y", "README.md": "readme"]); defer { p.remove() }

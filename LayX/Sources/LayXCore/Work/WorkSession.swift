@@ -231,6 +231,18 @@ public final class WorkSession {
         }
     }
 
+    /// Clears the conversation (and refinement context). Stops a running proposal; a proposal that is waiting
+    /// for review is kept so it can still be applied or rejected.
+    public func clearConversation() {
+        task?.cancel()
+        turns = []
+        lastRequest = ""
+        liveText = ""
+        error = nil
+        notice = nil
+        if phase == .reading || phase == .generating { phase = changeSet == nil ? .idle : .proposed }
+    }
+
     public func toggle(_ path: String) {
         guard let i = changeSet?.changes.firstIndex(where: { $0.path == path }) else { return }
         changeSet?.changes[i].selected.toggle()

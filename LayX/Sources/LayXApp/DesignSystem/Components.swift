@@ -6,7 +6,13 @@ import LayXCore
 
 private struct GlassTransparencyKey: EnvironmentKey { static let defaultValue: Double = LX.Glass.defaultValue }
 private struct GlowPresetKey: EnvironmentKey { static let defaultValue: LX.Glow = .violet }
+private struct FullGlassKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
+    /// Settings → Appearance → Full glass: the whole window (content panes, cards) becomes translucent.
+    var fullGlass: Bool {
+        get { self[FullGlassKey.self] }
+        set { self[FullGlassKey.self] = newValue }
+    }
     var glowPreset: LX.Glow {
         get { self[GlowPresetKey.self] }
         set { self[GlowPresetKey.self] = newValue }
@@ -43,11 +49,12 @@ struct VisualEffectBlur: NSViewRepresentable {
 struct Backdrop: View {
     @Environment(\.glassTransparency) private var t
     @Environment(\.glowPreset) private var glow
+    @Environment(\.fullGlass) private var fullGlass
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 VisualEffectBlur(material: .fullScreenUI, blending: .behindWindow)
-                LX.C.base.opacity(LX.Glass.baseOpacity(t))
+                LX.C.base.opacity(LX.Glass.baseOpacity(t) * (fullGlass ? LX.Glass.fullGlassScale : 1))
                 RadialGradient(colors: [glow.primary, .clear],
                                center: UnitPoint(x: 0.08, y: 0.10),
                                startRadius: 0, endRadius: max(geo.size.width, geo.size.height) * 0.45)
@@ -66,6 +73,7 @@ struct PaneBackground: ViewModifier {
     var tint: Color = LX.C.pane
     var shadow: Bool = true
     @Environment(\.glassTransparency) private var t
+    @Environment(\.fullGlass) private var fullGlass
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -73,7 +81,7 @@ struct PaneBackground: ViewModifier {
             .background {
                 ZStack {
                     shape.fill(.ultraThinMaterial)
-                    shape.fill(tint.opacity(LX.Glass.tintScale(t)))
+                    shape.fill(tint.opacity(LX.Glass.tintScale(t) * (fullGlass ? LX.Glass.fullGlassScale : 1)))
                 }
             }
             .clipShape(shape)
@@ -94,10 +102,11 @@ struct PaneBackground: ViewModifier {
 struct WellBackground: ViewModifier {
     var radius: CGFloat = LX.R.lg
     var fill: Color = LX.C.well
+    @Environment(\.fullGlass) private var fullGlass
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         return content
-            .background(shape.fill(fill))
+            .background(shape.fill(fill.opacity(fullGlass ? 0.6 : 1)))
             .overlay(shape.strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
     }
 }

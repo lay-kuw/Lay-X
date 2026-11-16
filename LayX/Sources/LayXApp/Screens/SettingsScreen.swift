@@ -42,6 +42,7 @@ struct SettingsScreen: View {
     @AppStorage(LX.Glass.storageKey) private var transparency = LX.Glass.defaultValue
     @AppStorage(LX.Glow.storageKey) private var glowRaw = LX.Glow.violet.rawValue
     @AppStorage(AppearancePreferences.followReduceTransparencyKey) private var followSystem = true
+    @AppStorage(LX.Glass.fullGlassKey) private var fullGlass = false
     @AppStorage(EnginePreferences.keepLoadedKey) private var keepLoaded = 15
     @AppStorage(EnginePreferences.memoryLimitKey) private var memoryLimitGB = 0.0
     @AppStorage(EnginePreferences.kvBitsKey) private var kvBits = 0
@@ -96,11 +97,15 @@ struct SettingsScreen: View {
                 row("Transparency", "How much of the wallpaper shows through the window, panes and Mini Chat") {
                     GradientSlider(value: $transparency, range: 0...1) { "\(Int(($0 * 100).rounded()))%" }
                 }
-                row("Reset to default", "50% transparency and Deep Violet — the look used in the design mocks") {
+                row("Full glass", "Make the whole window translucent — content panes and cards too, not only the sidebar") {
+                    Toggle("", isOn: $fullGlass).toggleStyle(LXToggleStyle()).labelsHidden().fixedSize()
+                }
+                row("Reset to default", "50% transparency, Deep Violet, full glass off — the look used in the design mocks") {
                     LXButton(title: "Reset") {
                         withAnimation(LX.M.panel) {
                             transparency = LX.Glass.defaultValue
                             glowRaw = LX.Glow.violet.rawValue
+                            fullGlass = false
                         }
                     }
                 }
@@ -338,7 +343,7 @@ struct SettingsScreen: View {
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Use for Models"
-        panel.message = "Choose a folder for Lay X models. If it isn’t empty, a “Lay X Models” folder is created inside it."
+        panel.message = "Choose the folder Lay X uses for models. Model folders (owner/name) already in it are listed too."
         panel.directoryURL = AppServices.shared.models.store.root
         if panel.runModal() == .OK, let url = panel.url {
             storageError = AppServices.shared.models.changeStorage(to: url)

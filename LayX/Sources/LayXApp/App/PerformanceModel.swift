@@ -14,7 +14,7 @@ final class PerformanceModel {
     var notice: String?
 
     @ObservationIgnored private var task: Task<Void, Never>?
-    @ObservationIgnored private let store: BenchmarkStore?
+    @ObservationIgnored private var store: BenchmarkStore?
     @ObservationIgnored private let coordinator: InferenceCoordinator
 
     static let engineName = "MLX Swift 0.32.3 · mlx-swift-lm 3.32.3"
@@ -27,6 +27,12 @@ final class PerformanceModel {
 
     var isRunning: Bool { task != nil }
     var selected: BenchmarkResult? { results.first { $0.id == selectedID } ?? results.first }
+
+    func replaceStore(_ newStore: BenchmarkStore?) async {
+        store = newStore
+        selectedID = nil
+        await reload()
+    }
 
     func reload() async {
         guard let store else { return }

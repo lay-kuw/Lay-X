@@ -108,7 +108,8 @@ nonisolated enum CommandLineTools {
             }
             print(String(format: "  peak MLX memory %.2f GB, weights %.2f GB, load %.2f s", Double(result.peakMemoryBytes ?? 0) / 1_073_741_824,
                          Double(result.weightBytes ?? 0) / 1_073_741_824, result.loadDuration?.seconds ?? 0))
-            let db = try SQLiteDatabase(location: .file(try LayXSchema.defaultURL()), migrations: LayXSchema.migrations)
+            let dbURL = try await MainActor.run { try AppServices.databaseURL() }
+            let db = try SQLiteDatabase(location: .file(dbURL), migrations: LayXSchema.migrations)
             try await BenchmarkStore(database: db).save(result)
             print("  saved run \(result.id)")
         case "--serve":

@@ -39,7 +39,7 @@ public final class ChatSessionStore {
     public var persistenceError: String?
 
     @ObservationIgnored private let coordinator: InferenceCoordinator
-    @ObservationIgnored private let repository: (any PinnedChatStoring)?
+    @ObservationIgnored private var repository: (any PinnedChatStoring)?
     @ObservationIgnored private let settings: @MainActor () -> ChatGenerationSettings
     /// Called before a generation when no model is loaded; should load the default model or throw.
     @ObservationIgnored private let prepareModel: @MainActor () async throws -> LoadedModelInfo
@@ -83,6 +83,16 @@ public final class ChatSessionStore {
         } catch {
             persistenceError = "Pinned chats couldn’t be loaded."
         }
+    }
+
+    /// Switches to another pinned-chat store (database moved or another database chosen): pinned sessions
+    /// from the old store leave memory and the new store's pinned sessions are loaded. Temporary chats stay.
+    public func replaceRepository(_ newRepository: (any PinnedChatStoring)?) async {
+        await flushWrites()
+        repository = newRepository
+        persistenceError = nil
+        sessions.removeAll { $0.isPinned && !generating.contains($0.id) }
+        await loadPinned()
     }
 
     /// Creates an empty temporary session, or returns an existing empty temporary one (no clutter).
