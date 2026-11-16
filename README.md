@@ -13,6 +13,7 @@ No cloud. No account. No sneaky uploads. Just you, your Apple Silicon, and a ver
 ![Swift](https://img.shields.io/badge/Swift-6-f97316?style=flat-square&logo=swift&logoColor=white)
 ![MLX](https://img.shields.io/badge/powered%20by-MLX-a78bfa?style=flat-square)
 ![Privacy](https://img.shields.io/badge/privacy-on--device-34d399?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-f9a8d4?style=flat-square)
 
 <img src="design/screens/D-main.png" width="820" alt="Lay X chat window (design)">
 
@@ -161,6 +162,10 @@ Developer notes (tests, headless check commands, icon pipeline) live in [`LayX/R
 cd LayX
 scripts/test-core.sh   # core + server test suites
 ```
+
+## 📜 License
+
+[MIT](LICENSE) — use it, remix it, share it. Just keep the little copyright notice. 💌
 
 ## 💜 Thanks
 
