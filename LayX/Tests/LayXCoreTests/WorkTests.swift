@@ -301,10 +301,46 @@ struct TempProject {
         let entries = WorkspaceScanner.scan(ws)
         let sel = ContextBuilder.select(request: "fix @Sources/Other.swift and the chat view", entries: entries, focus: nil,
                                         in: ws, tokenBudget: 10_000)
-        #expect(sel.files.first?.path == "Sources/Other.swift")
-        #expect(sel.files.map(\.path).contains("Sources/ChatView.swift"))
+        // With an @ mention only the mentioned files are read.
+        #expect(sel.files.map(\.path) == ["Sources/Other.swift"])
+        #expect(sel.explicit)
+        let auto = ContextBuilder.select(request: "fix the chat view", entries: entries, focus: nil, in: ws, tokenBudget: 10_000)
+        #expect(auto.files.map(\.path).contains("Sources/ChatView.swift"))
+        #expect(!auto.explicit)
         let tight = ContextBuilder.select(request: "chat view", entries: entries, focus: nil, in: ws, tokenBudget: 100)
         #expect(!tight.files.map(\.path).contains("Sources/ChatView.swift"))
+    }
+}
+
+@Suite struct MentionResolveTests {
+    let entries = [
+        WorkspaceEntry(path: "Sources", isDirectory: true, size: 0),
+        WorkspaceEntry(path: "Sources/Greeter.swift", isDirectory: false, size: 1),
+        WorkspaceEntry(path: "Sources/Util.swift", isDirectory: false, size: 1),
+        WorkspaceEntry(path: "README.md", isDirectory: false, size: 1),
+    ]
+
+    @Test func classifiesMentions() {
+        let m = ContextBuilder.resolve("use @Sources/Greeter.swift @README.md, create @Sources/New.swift, see @Sources/ and @all; mail a@b",
+                                       entries: entries)
+        #expect(m.map(\.path) == ["Sources/Greeter.swift", "README.md", "Sources/New.swift", "Sources/", "all"])
+        #expect(m.map(\.kind) == [.read, .read, .new, .folder(files: 2), .all])
+    }
+
+    @Test func bareNameResolvesToUniqueFile() {
+        #expect(ContextBuilder.resolve("fix @Util.swift", entries: entries) == [ContextBuilder.Mention(path: "Sources/Util.swift", kind: .read)])
+    }
+
+    @Test func newOnlyReadsNothing() throws {
+        let p = try TempProject(files: ["Sources/Greeter.swift": "g", "Sources/Chat.swift": "c"]); defer { p.remove() }
+        let ws = try Workspace(root: p.root)
+        let sel = ContextBuilder.select(request: "add chat helpers in @Sources/ChatHelpers.swift", entries: WorkspaceScanner.scan(ws),
+                                        focus: nil, in: ws, tokenBudget: 10_000)
+        #expect(sel.files.isEmpty)
+        #expect(sel.newFiles == ["Sources/ChatHelpers.swift"])
+        #expect(WorkPrompt.user(request: "x", selection: sel, workspaceName: "p").contains("- Sources/ChatHelpers.swift"))
+        let all = ContextBuilder.select(request: "review @all", entries: WorkspaceScanner.scan(ws), focus: nil, in: ws, tokenBudget: 10_000)
+        #expect(Set(all.files.map(\.path)) == ["Sources/Greeter.swift", "Sources/Chat.swift"])
     }
 }
 
@@ -331,8 +367,16 @@ struct TempProject {
         #expect(s.first?.path == "Sources/Chat")
         #expect(s.first?.insertion == "Sources/Chat/")
         #expect(s.map(\.path).contains("Sources/Chat/ChatView.swift"))
-        #expect(MentionCompleter.suggestions(for: "", in: entries).map(\.path) == ["Sources", "README.md"])
+        #expect(MentionCompleter.suggestions(for: "", in: entries).map(\.path) == ["all", "Sources", "README.md"])
         #expect(MentionCompleter.suggestions(for: "sources/chat/co", in: entries).map(\.path) == ["Sources/Chat/Composer.swift"])
+    }
+
+    @Test func offersAllAndCreate() {
+        #expect(MentionCompleter.suggestions(for: "al", in: entries).first?.kind == .all)
+        let new = MentionCompleter.suggestions(for: "Sources/Chat/NewView.swift", in: entries)
+        #expect(new.first?.kind == .new)
+        #expect(new.first?.path == "Sources/Chat/NewView.swift")
+        #expect(MentionCompleter.suggestions(for: "README.md", in: entries).allSatisfy { $0.kind != .new })
     }
 
     @Test func applyReplacesToken() {

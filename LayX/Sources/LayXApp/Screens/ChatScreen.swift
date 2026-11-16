@@ -314,6 +314,7 @@ struct ChatThread: View {
     @Environment(InferenceStatusModel.self) private var inference
     private var chats: ChatSessionStore { AppServices.shared.chats }
     @State private var followBottom = true
+    @State private var userScrolling = false
 
     var body: some View {
         let generating = chats.isGenerating(session.id)
@@ -326,7 +327,8 @@ struct ChatThread: View {
                     }
                     ForEach(Array(session.messages.enumerated()), id: \.element.id) { index, message in
                         let isLast = index == session.messages.count - 1
-                        MessageView(message: message, streaming: generating && isLast && message.role == .assistant)
+                        MessageRow(sessionID: session.id, message: message,
+                                   streaming: generating && isLast && message.role == .assistant)
                         if isLast && message.role == .assistant && !generating {
                             MessageActions(sessionID: session.id, message: message)
                         }
@@ -362,10 +364,21 @@ struct ChatThread: View {
             .onScrollGeometryChange(for: Bool.self) { geo in
                 geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 60
             } action: { _, nearBottom in
-                followBottom = nearBottom
+                if !userScrolling { followBottom = nearBottom }
             }
-            .onChange(of: session.messages.last?.content.count) {
-                if followBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+            // While the user drags / flicks, never scroll programmatically (that fight is what felt jerky);
+            // following resumes when they come to rest at the bottom.
+            .onScrollPhaseChange { _, phase, context in
+                userScrolling = phase == .interacting || phase == .decelerating
+                if phase == .idle {
+                    let g = context.geometry
+                    followBottom = g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 60
+                }
+            }
+            .background {
+                LiveScrollFollower(sessionID: session.id) {
+                    if followBottom && !userScrolling { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
             }
             .onChange(of: session.messages.count) {
                 followBottom = true
@@ -385,6 +398,32 @@ struct ChatThread: View {
         if case .loading = inference.snapshot.model { return "loading model…" }
         if inference.snapshot.activeClient != nil && inference.snapshot.activeClient != .chat { return "waiting…" }
         return "thinking…"
+    }
+}
+
+/// One message in the thread. Only a streaming row reads the store's live text, so a flush re-renders that
+/// row alone; finished rows are `Equatable` and skip re-rendering.
+struct MessageRow: View {
+    let sessionID: UUID
+    let message: ChatMessage
+    let streaming: Bool
+
+    var body: some View {
+        var shown = message
+        if streaming { shown.content = AppServices.shared.chats.displayContent(message, in: sessionID) }
+        return MessageView(message: shown, streaming: streaming).equatable()
+    }
+}
+
+/// Calls `action` whenever the session's live reply grows (drives auto-scroll without making the thread
+/// itself observe the streamed text).
+struct LiveScrollFollower: View {
+    let sessionID: UUID
+    let action: () -> Void
+
+    var body: some View {
+        Color.clear
+            .onChange(of: AppServices.shared.chats.liveReplies[sessionID]?.text.count) { action() }
     }
 }
 
@@ -512,11 +551,25 @@ struct MarkdownView: View {
     let text: String
     /// Mini Chat uses a slightly smaller body size (13.5 vs 14).
     var compact = false
-    private var bodyFont: Font { compact ? LX.F.ui(13.5) : LX.F.bodyLarge }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // Each block is its own Equatable view: while streaming, finished blocks are not re-rendered
+            // (inline Markdown and code highlighting are the expensive parts).
             ForEach(Array(MarkdownParser.blocks(text).enumerated()), id: \.offset) { _, block in
+                MarkdownBlockView(block: block, compact: compact).equatable()
+            }
+        }
+        .textSelection(.enabled)
+    }
+}
+
+struct MarkdownBlockView: View, Equatable {
+    let block: MarkdownBlock
+    var compact = false
+    private var bodyFont: Font { compact ? LX.F.ui(13.5) : LX.F.bodyLarge }
+
+    var body: some View {
                 switch block {
                 case .paragraph(let s):
                     inline(s).font(bodyFont).foregroundStyle(LX.C.body).lineSpacing(compact ? 5 : 6)
@@ -539,9 +592,6 @@ struct MarkdownView: View {
                 case .rule:
                     Rectangle().fill(LX.C.divider).frame(height: 1)
                 }
-            }
-        }
-        .textSelection(.enabled)
     }
 
     private func inline(_ s: String) -> Text {

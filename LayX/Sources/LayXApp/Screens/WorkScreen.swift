@@ -62,9 +62,19 @@ struct WorkProjectView: View {
         return MentionCompleter.suggestions(for: q, in: session.entries)
     }
 
+    @AppStorage("lx.workThinking") private var workThinking = false
+
     private func acceptMention(_ s: MentionCompleter.Suggestion) {
         request = MentionCompleter.apply(s, to: request)
         mentionIndex = 0
+        // Stay in the input (a click on the list would otherwise end editing).
+        inputFocused = true
+        DispatchQueue.main.async { inputFocused = true }
+    }
+
+    /// What the `@` mentions in the draft will do (shown as chips inside the composer).
+    private var draftMentions: [ContextBuilder.Mention] {
+        ContextBuilder.resolve(request, entries: session.entries)
     }
 
     private var changes: [ProposedChange] { session.changeSet?.changes ?? [] }
@@ -233,7 +243,9 @@ struct WorkProjectView: View {
     /// The file block the model is writing (or wrote last) in the live output.
     private var liveBlock: LiveCodeView.Block? {
         guard session.phase == .generating else { return nil }
-        return LiveCodeView.Block.last(in: session.liveText)
+        let parts = ThinkingParser.split(session.liveText)
+        guard !parts.isThinking else { return nil }   // file blocks only count outside the reasoning
+        return LiveCodeView.Block.last(in: parts.answer)
     }
 
     private func loadPreview() {
@@ -308,7 +320,7 @@ struct WorkProjectView: View {
                     LXButton(title: "Reject all", kind: .danger) { session.reject() }
                         .keyboardShortcut(.delete, modifiers: .command)
                         .disabled(session.phase == .applying)
-                    LXButton(title: "Apply \(selectedCount) change\(selectedCount == 1 ? "" : "s")", symbol: "checkmark", kind: .primary) {
+                    LXButton(title: "Apply \(selectedCount) change\(selectedCount == 1 ? "" : "s")", symbol: "checkmark", kind: .success) {
                         session.apply()
                     }
                     .keyboardShortcut(.return, modifiers: [.command, .shift])
@@ -423,7 +435,12 @@ struct WorkProjectView: View {
 
             if !mentionSuggestions.isEmpty { mentionList }
             VStack(alignment: .leading, spacing: 0) {
-                TextField(changes.isEmpty ? "Describe a change… (@ to add files)" : "Refine the proposal…", text: $request, axis: .vertical)
+                if !draftMentions.isEmpty {
+                    MentionChips(mentions: draftMentions)
+                        .padding(.horizontal, 10).padding(.top, 9)
+                        .transition(.opacity)
+                }
+                TextField(changes.isEmpty ? "Describe a change… (@file to read, @new.swift to create, @all)" : "Refine the proposal…", text: $request, axis: .vertical)
                     .textFieldStyle(.plain).font(LX.F.body).lineLimit(1...6)
                     .focused($inputFocused)
                     .onKeyPress(.return, phases: .down) { press in
@@ -462,11 +479,21 @@ struct WorkProjectView: View {
                     .onChange(of: request) { mentionIndex = 0 }
                     .onSubmit { submit() }
                     .padding(.horizontal, 12).padding(.top, 11).padding(.bottom, 7)
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    Button { workThinking.toggle() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: workThinking ? "brain" : "bolt").font(.system(size: 10, weight: .medium))
+                            Text(workThinking ? "Thinking" : "No thinking")
+                        }
+                        .font(LX.F.caption)
+                        .padding(.horizontal, 8).frame(height: 24)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(QuietButtonStyle(radius: LX.R.sm, active: workThinking))
+                    .help("Reasoning before the proposal (slower, sometimes better for larger changes). Continuations never think.")
                     ContextMeter(used: session.contextUsed > 0 ? session.contextUsed : PromptBuilder.estimateTokens(request),
                                  total: session.contextLength ?? inference.loadedModel?.contextLength)
                         .help("Estimated tokens of the last proposal (files + request + output) / model context window")
-                    Text("@ adds files").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary)
                     Spacer()
                     if busy {
                         SendButton(mode: .stop) { session.cancel() }.keyboardShortcut(.escape, modifiers: [])
@@ -474,7 +501,7 @@ struct WorkProjectView: View {
                         SendButton(mode: .send, enabled: !request.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { submit() }
                     }
                 }
-                .padding(.leading, 12).padding(.trailing, 7).frame(height: 34)
+                .padding(.leading, 6).padding(.trailing, 7).frame(height: 36)
             }
             .background {
                 ZStack {
@@ -498,10 +525,19 @@ struct WorkProjectView: View {
             ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
                 Button { acceptMention(item) } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: item.isDirectory ? "folder" : "doc")
-                            .font(.system(size: 11)).foregroundStyle(item.isDirectory ? LX.C.accent : LX.C.tertiary).frame(width: 14)
-                        Text(item.name).font(LX.F.bodySmall).foregroundStyle(LX.C.primary).lineLimit(1)
-                        Text(item.path).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1).truncationMode(.head)
+                        Image(systemName: MentionStyle.symbol(item.kind))
+                            .font(.system(size: 11)).foregroundStyle(MentionStyle.color(item.kind)).frame(width: 14)
+                        switch item.kind {
+                        case .all:
+                            Text("all").font(LX.F.bodySmall).foregroundStyle(LX.C.primary)
+                            Text("every file in the project").font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
+                        case .new:
+                            Text("Create").font(LX.F.bodySmall).foregroundStyle(MentionStyle.color(.new))
+                            Text(item.path).font(LX.F.mono(10.5)).foregroundStyle(LX.C.secondary).lineLimit(1).truncationMode(.head)
+                        default:
+                            Text(item.name).font(LX.F.bodySmall).foregroundStyle(LX.C.primary).lineLimit(1)
+                            Text(item.path).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1).truncationMode(.head)
+                        }
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 8).frame(height: 26)
@@ -547,7 +583,76 @@ struct WorkProjectView: View {
         let text = request.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !busy else { return }
         request = ""
+        session.thinking = workThinking
         session.propose(text, refining: session.changeSet != nil)
+    }
+}
+
+// MARK: - Mentions
+
+enum MentionStyle {
+    static func symbol(_ kind: MentionCompleter.Suggestion.Kind) -> String {
+        switch kind {
+        case .file: "doc"
+        case .folder: "folder"
+        case .all: "square.stack.3d.up"
+        case .new: "plus.square"
+        }
+    }
+
+    static func color(_ kind: MentionCompleter.Suggestion.Kind) -> Color {
+        switch kind {
+        case .file: LX.C.tertiary
+        case .folder: LX.C.accent
+        case .all: LX.C.liveCyan
+        case .new: Color(hex: 0x8EE6B4)
+        }
+    }
+}
+
+/// Chips inside the Work composer showing what each `@` mention does: Read / Folder / New / All.
+struct MentionChips: View {
+    let mentions: [ContextBuilder.Mention]
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 6) {
+                ForEach(mentions) { m in chip(m) }
+            }
+        }
+        .scrollIndicators(.hidden)
+        .animation(LX.M.hover, value: mentions)
+    }
+
+    private func chip(_ m: ContextBuilder.Mention) -> some View {
+        let (label, kind, detail): (String, MentionCompleter.Suggestion.Kind, String) = switch m.kind {
+        case .read: ("Read", .file, (m.path as NSString).lastPathComponent)
+        case .folder(let n): ("Read", .folder, "\(m.path) · \(n) file\(n == 1 ? "" : "s")")
+        case .new: ("New", .new, m.path)
+        case .all: ("All files", .all, "")
+        }
+        let color = kind == .file ? LX.C.secondary : MentionStyle.color(kind)
+        return HStack(spacing: 5) {
+            Image(systemName: MentionStyle.symbol(kind)).font(.system(size: 9.5, weight: .semibold))
+            Text(label).font(LX.F.ui(11, .semibold))
+            if !detail.isEmpty {
+                Text(detail).font(LX.F.mono(10.5)).foregroundStyle(LX.C.body).lineLimit(1).truncationMode(.middle)
+            }
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 7).frame(height: 21)
+        .background(RoundedRectangle(cornerRadius: LX.R.sm, style: .continuous).fill(color.opacity(0.12)))
+        .help(help(m))
+        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+    }
+
+    private func help(_ m: ContextBuilder.Mention) -> String {
+        switch m.kind {
+        case .read: "\(m.path) will be read"
+        case .folder: "The text files in \(m.path) will be read"
+        case .new: "\(m.path) doesn’t exist — Work will create it"
+        case .all: "Every text file in the project is read (as many as fit the context)"
+        }
     }
 }
 

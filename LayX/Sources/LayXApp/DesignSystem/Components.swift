@@ -275,7 +275,8 @@ struct GlowingBorder: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion)) { ctx in
+        // 30 fps and rasterised in one Metal pass: the glow (a blur) must stay cheap next to scrolling text.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { ctx in
             let angle = Angle.degrees((ctx.date.timeIntervalSinceReferenceDate * 110).truncatingRemainder(dividingBy: 360))
             let gradient = AngularGradient(
                 colors: [LX.C.liveCyan, Color(hex: 0x9D8CFF), LX.C.liveViolet.opacity(0.25), LX.C.liveCyan.opacity(0.25), LX.C.liveCyan],
@@ -285,6 +286,7 @@ struct GlowingBorder: View {
                 shape.strokeBorder(gradient, lineWidth: 1.5)
                 shape.strokeBorder(gradient, lineWidth: 4).blur(radius: 8).opacity(0.55)
             }
+            .padding(-12).drawingGroup().padding(12)   // room for the glow inside the rasterised layer
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -299,7 +301,7 @@ struct LiveStatusText: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { ctx in
             let phase = (ctx.date.timeIntervalSinceReferenceDate / 1.6).truncatingRemainder(dividingBy: 1)
             Text(text)
                 .font(font)
@@ -341,7 +343,7 @@ struct BlinkingCaret: View {
 
 // MARK: - Buttons
 
-enum LXButtonKind { case primary, secondary, danger, plain }
+enum LXButtonKind { case primary, secondary, danger, success, plain }
 
 struct LXButtonStyle: ButtonStyle {
     var kind: LXButtonKind = .secondary
@@ -378,6 +380,9 @@ private struct LXButtonBody: View {
             case .danger:
                 label.foregroundStyle(Color(hex: 0xFF9C9C))
                     .background(shape.fill(Color(hex: 0xFF5A5A, alpha: 0.08 + 0.05 * level)))
+            case .success:
+                label.foregroundStyle(Color(hex: 0x8EE6B4))
+                    .background(shape.fill(Color(hex: 0x3DD68C, alpha: 0.10 + 0.05 * level)))
             case .plain:
                 label.foregroundStyle(LX.C.body)
                     .background(shape.fill(Color.white.opacity(0.05 * level)))

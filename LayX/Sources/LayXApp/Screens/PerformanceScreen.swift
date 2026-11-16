@@ -52,7 +52,7 @@ struct PerformanceScreen: View {
                     }
                     switch mode {
                     case .benchmarks: benchmarks
-                    case .live: live
+                    case .live: PerformanceLiveView()
                     }
                 }
                 .padding(16)
@@ -275,63 +275,6 @@ struct PerformanceScreen: View {
                 .padding(.horizontal, 14).padding(.vertical, 10)
         }
         .well()
-    }
-
-    // MARK: Live
-
-    private var live: some View {
-        let last = inference.history.first
-        let gb = 1_073_741_824.0
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                KPITile(label: "Time to first token", value: last.map { String(format: "%.0f", $0.metrics.timeToFirstToken.milliseconds) } ?? "—",
-                        unit: "ms", note: last.map { "\($0.metrics.promptTokens) prompt tokens" } ?? "no generation yet",
-                        spark: inference.history.prefix(20).reversed().map { $0.metrics.timeToFirstToken.milliseconds })
-                KPITile(label: "Prefill", value: last?.metrics.prefillTokensPerSecond.map { Int($0).formatted() } ?? "—",
-                        unit: "tok/s", note: "last generation",
-                        spark: inference.history.prefix(20).reversed().compactMap { $0.metrics.prefillTokensPerSecond })
-                KPITile(label: "Decode", value: last?.metrics.decodeTokensPerSecond.map { String(format: "%.1f", $0) } ?? "—",
-                        unit: "tok/s", note: last.map { "\($0.metrics.generatedTokens) tokens" } ?? "",
-                        spark: inference.history.prefix(20).reversed().compactMap { $0.metrics.decodeTokensPerSecond })
-                KPITile(label: "MLX memory", value: inference.engineMemory.map { String(format: "%.1f", Double($0.activeBytes) / gb) } ?? "—",
-                        unit: "GB", note: inference.engineMemory.map { String(format: "cache %.1f · peak %.1f", Double($0.cacheBytes) / gb, Double($0.peakBytes) / gb) } ?? "",
-                        spark: [])
-            }
-            VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    Text("RECENT GENERATIONS").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("SOURCE").frame(width: 90, alignment: .leading)
-                    Text("PROMPT").frame(width: 80, alignment: .trailing)
-                    Text("OUT").frame(width: 70, alignment: .trailing)
-                    Text("TTFT").frame(width: 90, alignment: .trailing)
-                    Text("DECODE").frame(width: 90, alignment: .trailing)
-                    Text("STOP").frame(width: 100, alignment: .trailing)
-                }
-                .font(LX.F.label).kerning(0.6).foregroundStyle(LX.C.tertiary)
-                .padding(.horizontal, 14).frame(height: 30)
-                Rectangle().fill(LX.C.divider).frame(height: 1)
-                ForEach(inference.history.prefix(30)) { s in
-                    HStack(spacing: 0) {
-                        Text(ModelRepoID(s.modelID).map(ModelDisplay.name) ?? s.modelID).frame(maxWidth: .infinity, alignment: .leading)
-                        Text(s.client.rawValue).font(LX.F.mono(11)).foregroundStyle(LX.C.secondary).frame(width: 90, alignment: .leading)
-                        Text("\(s.metrics.promptTokens)").font(LX.F.mono(12)).frame(width: 80, alignment: .trailing)
-                        Text("\(s.metrics.generatedTokens)").font(LX.F.mono(12)).frame(width: 70, alignment: .trailing)
-                        Text(String(format: "%.0f ms", s.metrics.timeToFirstToken.milliseconds)).font(LX.F.mono(12)).frame(width: 90, alignment: .trailing)
-                        Text(s.metrics.decodeTokensPerSecond.map { String(format: "%.1f", $0) } ?? "—").font(LX.F.mono(12)).frame(width: 90, alignment: .trailing)
-                        Text(s.metrics.stopReason.rawValue).font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary).frame(width: 100, alignment: .trailing)
-                    }
-                    .font(LX.F.bodySmall).foregroundStyle(LX.C.body)
-                    .padding(.horizontal, 14).frame(height: LX.S.tableRow)
-                    .overlay(alignment: .bottom) { Rectangle().fill(LX.C.rowLine).frame(height: 1) }
-                }
-                if inference.history.isEmpty {
-                    Text("Numbers from Chat, Mini Chat, Work and API generations appear here (this session only, no content).")
-                        .font(LX.F.caption).foregroundStyle(LX.C.tertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(14)
-                }
-            }
-            .well()
-        }
     }
 }
 

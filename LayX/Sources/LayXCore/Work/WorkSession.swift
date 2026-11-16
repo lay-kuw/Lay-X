@@ -8,6 +8,58 @@ public enum ContextBuilder {
         public var tree: String
         public var estimatedTokens: Int
         public var skipped: Int
+        /// Paths the user mentioned that don't exist yet: files to create.
+        public var newFiles: [String] = []
+        /// True when the user chose the files with `@` (only those were read).
+        public var explicit = false
+    }
+
+    /// A resolved `@` mention: what the request will do with that path.
+    public struct Mention: Sendable, Hashable, Identifiable {
+        public enum Kind: Sendable, Hashable {
+            /// Existing file: its content is read.
+            case read
+            /// Existing folder: the text files inside are read.
+            case folder(files: Int)
+            /// Doesn't exist: the model is asked to create it.
+            case new
+            /// `@all`: every text file in the project (within the context budget).
+            case all
+        }
+        public var path: String
+        public var kind: Kind
+        public var id: String { path }
+    }
+
+    /// Classifies the `@` mentions in a request against the project.
+    public static func resolve(_ request: String, entries: [WorkspaceEntry]) -> [Mention] {
+        var out: [Mention] = []
+        var seen = Set<String>()
+        for raw in mentions(in: request) {
+            var token = raw.hasPrefix("./") ? String(raw.dropFirst(2)) : raw
+            guard !token.isEmpty else { continue }
+            let isFolderToken = token.hasSuffix("/")
+            if isFolderToken { token.removeLast() }
+            let mention: Mention?
+            if let file = entries.first(where: { !$0.isDirectory && $0.path == token }) {
+                mention = Mention(path: file.path, kind: .read)
+            } else if let dir = entries.first(where: { $0.isDirectory && $0.path == token }) {
+                let count = entries.filter { !$0.isDirectory && $0.path.hasPrefix(dir.path + "/") && WorkspaceScanner.isLikelyText($0.path) }.count
+                mention = Mention(path: dir.path + "/", kind: .folder(files: count))
+            } else if token.lowercased() == "all" {
+                mention = Mention(path: "all", kind: .all)
+            } else if !isFolderToken, !token.contains(".."), !token.hasPrefix("/"),
+                      case let byName = entries.filter({ !$0.isDirectory && $0.name == token }), byName.count == 1 {
+                mention = Mention(path: byName[0].path, kind: .read)     // "@Greeter.swift" → its unique path
+            } else if !isFolderToken, !token.contains(".."), !token.hasPrefix("/"),
+                      token.contains(".") || token.contains("/") {
+                mention = Mention(path: token, kind: .new)
+            } else {
+                mention = nil
+            }
+            if let mention, seen.insert(mention.path).inserted { out.append(mention) }
+        }
+        return out
     }
 
     /// Paths written as `@path/to/file` in the request.
@@ -38,20 +90,37 @@ public enum ContextBuilder {
     public static func select(request: String, entries: [WorkspaceEntry], focus: String?, in workspace: Workspace,
                               tokenBudget: Int) -> Selection {
         let files = entries.filter { !$0.isDirectory && WorkspaceScanner.isLikelyText($0.path) && $0.size <= 200_000 }
-        let mentioned = Set(mentions(in: request))
-        // "@folder/" mentions include the files inside that folder.
-        let folderMentions = mentioned.map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 }
-            .filter { m in entries.contains { $0.isDirectory && $0.path == m } }
+        let resolved = resolve(request, entries: entries)
+        let newFiles = resolved.filter { $0.kind == .new }.map(\.path)
+        let wantsAll = resolved.contains { $0.kind == .all }
+        let readPaths = resolved.filter { $0.kind == .read }.map(\.path)
+        let folders = resolved.compactMap { m -> String? in if case .folder = m.kind { return m.path } else { return nil } }
+        // With any @ mention the user decides what is read: exactly the mentioned files and folders (or
+        // everything for @all; nothing but the tree when only new files are mentioned). Without mentions,
+        // the most relevant files are picked automatically.
+        let explicit = !resolved.isEmpty
         let kw = keywords(request)
-        let ranked = files.map { e -> (WorkspaceEntry, Int) in
-            var s = score(e.path, keywords: kw)
-            if mentioned.contains(e.path) || mentioned.contains(e.name) { s += 1000 }
-            if folderMentions.contains(where: { e.path.hasPrefix($0 + "/") }) { s += 600 }
-            if e.path == focus { s += 500 }
-            return (e, s)
+        let fileLimit = wantsAll ? 80 : (explicit ? 40 : 12)
+        let ranked: [(WorkspaceEntry, Int)]
+        if wantsAll {
+            ranked = files.map { e in (e, score(e.path, keywords: kw) + (readPaths.contains(e.path) ? 1000 : 0)) }
+                .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.path < $1.0.path }
+        } else if explicit {
+            ranked = files.compactMap { e in
+                if let i = readPaths.firstIndex(of: e.path) { return (e, 10_000 - i) }
+                if folders.contains(where: { e.path.hasPrefix($0) }) { return (e, 1000 + score(e.path, keywords: kw)) }
+                return nil
+            }
+            .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.path < $1.0.path }
+        } else {
+            ranked = files.map { e -> (WorkspaceEntry, Int) in
+                var s = score(e.path, keywords: kw)
+                if e.path == focus { s += 500 }
+                return (e, s)
+            }
+            .filter { $0.1 > 0 }
+            .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.path < $1.0.path }
         }
-        .filter { $0.1 > 0 }
-        .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.path < $1.0.path }
 
         // Bounded tree (the model sees structure without file contents).
         let treeLines = entries.prefix(300).map { e in String(repeating: "  ", count: e.depth) + e.name + (e.isDirectory ? "/" : "") }
@@ -60,14 +129,14 @@ public enum ContextBuilder {
         var chosen: [TextFile] = []
         var skipped = 0
         for (entry, _) in ranked {
-            guard chosen.count < 12 else { skipped += 1; continue }
+            guard chosen.count < fileLimit else { skipped += 1; continue }
             guard let file = try? TextFile.read(entry.path, in: workspace) else { continue }
             let cost = PromptBuilder.estimateTokens(file.text) + 20
             if used + cost > tokenBudget { skipped += 1; continue }
             chosen.append(file)
             used += cost
         }
-        return Selection(files: chosen, tree: tree, estimatedTokens: used, skipped: skipped)
+        return Selection(files: chosen, tree: tree, estimatedTokens: used, skipped: skipped, newFiles: newFiles, explicit: explicit)
     }
 }
 
@@ -110,9 +179,16 @@ public enum WorkPrompt {
 
     public static func user(request: String, selection: ContextBuilder.Selection, workspaceName: String) -> String {
         var s = "Project: \(workspaceName)\n\nProject tree:\n\(selection.tree)\n\n"
+        if !selection.newFiles.isEmpty {
+            s += "New files to create (they do not exist yet; write each one completely in the file format):\n"
+            s += selection.newFiles.map { "- \($0)" }.joined(separator: "\n") + "\n\n"
+        }
         if selection.files.isEmpty {
-            s += "(No file contents were included. Mention files with @path to include them.)\n\n"
+            s += selection.explicit
+                ? "(No existing file contents were included — the user selected none.)\n\n"
+                : "(No file contents were included. Mention files with @path to include them.)\n\n"
         } else {
+            if selection.explicit { s += "The user chose these files; only they were read.\n" }
             s += "Relevant files:\n"
             for f in selection.files {
                 s += "\n----- BEGIN FILE \(f.path) -----\n\(f.text)\n----- END FILE \(f.path) -----\n"
@@ -157,6 +233,8 @@ public final class WorkSession {
     /// Estimated prompt + output tokens of the current/last proposal (for the context meter).
     public private(set) var contextUsed = 0
     public private(set) var contextLength: Int?
+    /// Reasoning for proposals (composer toggle). Continuations never think — they resume the output.
+    public var thinking = false
 
     @ObservationIgnored private let coordinator: InferenceCoordinator
     @ObservationIgnored private let prepareModel: @MainActor () async throws -> LoadedModelInfo
@@ -247,17 +325,18 @@ public final class WorkSession {
         lastPrompt = prompt
         lastSelection = selection
         phase = .generating
-        await generate(messages: prompt, selection: selection, prefix: "")
+        await generate(messages: prompt, selection: selection, prefix: "", thinking: thinking)
     }
 
-    private func generate(messages prompt: [PromptMessage], selection: ContextBuilder.Selection, prefix: String) async {
+    private func generate(messages prompt: [PromptMessage], selection: ContextBuilder.Selection, prefix: String,
+                          thinking: Bool = false) async {
         let context = contextLength ?? 8192
         let promptTokens = prompt.reduce(0) { $0 + PromptBuilder.estimateTokens($1.content) + 8 }
         var maxOut = max(1024, min(context - promptTokens - 512, 16_384))
         // Test hook (CLI checks only): force a small output limit to exercise "Continue generating".
         if let forced = ProcessInfo.processInfo.environment["LAYX_WORK_MAX_TOKENS"].flatMap(Int.init) { maxOut = forced }
         let genRequest = GenerationRequest(messages: prompt, parameters: GenerationParameters(temperature: 0.2, topP: 0.95, maxTokens: maxOut),
-                                           client: .work, thinking: false)
+                                           client: .work, thinking: thinking)
         contextUsed = promptTokens
         var output = ""
         var metrics: GenerationMetrics?
@@ -294,7 +373,7 @@ public final class WorkSession {
         contextUsed = promptTokens + PromptBuilder.estimateTokens(output)
         let truncated = metrics?.stopReason == .maxTokens || metrics?.stopReason == .contextLimit
         canContinue = truncated && metrics?.stopReason == .maxTokens
-        let parsed = ProposalParser.parse(output, knownPaths: Set(selection.files.map(\.path)))
+        let parsed = ProposalParser.parse(output, knownPaths: Set(selection.files.map(\.path) + selection.newFiles))
         let set = ChangeSetBuilder.build(summary: parsed.summary, blocks: parsed.blocks, in: workspace)
         var note = "read \(selection.files.count) file\(selection.files.count == 1 ? "" : "s") · \(Self.compact(selection.estimatedTokens)) ctx"
         if let tps = metrics?.decodeTokensPerSecond { note += String(format: " · %.1f tok/s", tps) }

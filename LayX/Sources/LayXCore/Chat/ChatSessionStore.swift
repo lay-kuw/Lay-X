@@ -43,6 +43,21 @@ public final class ChatSessionStore {
     public var persistenceError: String?
     /// Live web-search step per session ("Searching the web for …").
     public private(set) var webStatus: [UUID: String] = [:]
+    /// Text of replies being streamed, per session. Kept apart from `sessions` so a streaming flush only
+    /// invalidates the views that show the live reply (not the sidebar, message list, composer…); committed to
+    /// the message when the generation ends.
+    public private(set) var liveReplies: [UUID: LiveReply] = [:]
+
+    public struct LiveReply: Sendable, Equatable {
+        public var messageID: UUID
+        public var text: String
+    }
+
+    /// The text to show for `message`: the live text while it is streaming, otherwise its content.
+    public func displayContent(_ message: ChatMessage, in id: UUID) -> String {
+        if let live = liveReplies[id], live.messageID == message.id { return message.content + live.text }
+        return message.content
+    }
 
     @ObservationIgnored private let coordinator: InferenceCoordinator
     @ObservationIgnored private var repository: (any PinnedChatStoring)?
@@ -54,8 +69,8 @@ public final class ChatSessionStore {
     @ObservationIgnored private let webResearcher: @MainActor () throws -> any WebResearching
     @ObservationIgnored private var writeQueue: Task<Void, Never>?
 
-    /// UI flush cadence for streamed text (design doc: buffer tokens, flush ~every 30 ms).
-    public var flushInterval: Duration = .milliseconds(30)
+    /// UI flush cadence for streamed text (buffer tokens, flush ~every 40 ms).
+    public var flushInterval: Duration = .milliseconds(40)
 
     public init(coordinator: InferenceCoordinator, repository: (any PinnedChatStoring)?,
                 settings: @escaping @MainActor () -> ChatGenerationSettings,
@@ -147,6 +162,7 @@ public final class ChatSessionStore {
         generating.remove(id)
         errors[id] = nil
         omittedMessages[id] = nil
+        liveReplies[id] = nil
         let wasPinned = session(id)?.isPinned ?? false
         sessions.removeAll { $0.id == id }
         // Safe disposal: the conversation's KV cache is derived from its content.
@@ -253,13 +269,16 @@ public final class ChatSessionStore {
                 case .finished(let metrics):
                     append(buffer, to: messageID, in: id)
                     buffer = ""
+                    commitLive(messageID, in: id)
                     setMetrics(metrics, on: messageID, in: id)
                 }
             }
             append(buffer, to: messageID, in: id)
+            commitLive(messageID, in: id)
             if Task.isCancelled { markInterrupted(messageID, in: id) }
         } catch {
             append(buffer, to: messageID, in: id)
+            commitLive(messageID, in: id)
             if error is CancellationError || Task.isCancelled {
                 markInterrupted(messageID, in: id)
             } else {
@@ -305,9 +324,20 @@ public final class ChatSessionStore {
     }
 
     private func append(_ text: String, to messageID: UUID, in id: UUID) {
-        guard !text.isEmpty, let i = index(id),
-              let m = sessions[i].messages.lastIndex(where: { $0.id == messageID }) else { return }
-        sessions[i].messages[m].content += text
+        guard !text.isEmpty, index(id) != nil else { return }
+        if liveReplies[id]?.messageID == messageID {
+            liveReplies[id]?.text += text
+        } else {
+            liveReplies[id] = LiveReply(messageID: messageID, text: text)
+        }
+    }
+
+    /// Moves the streamed text into the message (one `sessions` change per generation).
+    private func commitLive(_ messageID: UUID, in id: UUID) {
+        guard let live = liveReplies[id], live.messageID == messageID else { return }
+        liveReplies[id] = nil
+        guard let i = index(id), let m = sessions[i].messages.lastIndex(where: { $0.id == messageID }) else { return }
+        sessions[i].messages[m].content += live.text
     }
 
     private func setMetrics(_ metrics: GenerationMetrics, on messageID: UUID, in id: UUID) {

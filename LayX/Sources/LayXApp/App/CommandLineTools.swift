@@ -393,7 +393,9 @@ enum WorkCheck {
         try await coordinator.load(model.reference)
         let session = WorkSession(workspace: try Workspace(root: root), coordinator: coordinator,
                                   prepareModel: { throw InferenceError.noModelLoaded })
-        session.propose("In @Sources/Greeter.swift add a second function `farewell(name:)` that returns \"Goodbye, \" + name.")
+        session.thinking = ProcessInfo.processInfo.environment["LAYX_WORK_THINKING"] == "1"
+        session.propose(ProcessInfo.processInfo.environment["LAYX_WORK_REQUEST"]
+            ?? "In @Sources/Greeter.swift add a second function `farewell(name:)` that returns \"Goodbye, \" + name.")
         while session.phase == .reading || session.phase == .generating { try await Task.sleep(for: .milliseconds(50)) }
         var continued = 0
         while session.canContinue, continued < 8 {
