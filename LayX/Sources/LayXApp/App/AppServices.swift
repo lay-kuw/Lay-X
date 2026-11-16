@@ -18,6 +18,7 @@ final class AppServices {
     let pinnedChats: (any PinnedChatStoring)?
     let models: ModelLibrary
     let chats: ChatSessionStore
+    let work = WorkProjects()
     private var memoryPressure: DispatchSourceMemoryPressure?
 
     static let modelStorePathKey = "lx.modelStorePath"

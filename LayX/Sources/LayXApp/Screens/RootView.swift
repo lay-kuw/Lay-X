@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import LayXCore
 
@@ -84,15 +85,28 @@ struct Sidebar: View {
         case .chat:
             let chats = AppServices.shared.chats
             sectionHeader("Session", note: "· not saved")
-            ForEach(chats.temporarySessions.filter { !$0.messages.isEmpty || $0.id == state.currentChatID }) { chatRow($0, symbol: "clock") }
+            ForEach(chats.temporarySessions.filter { !$0.messages.isEmpty }) { chatRow($0, symbol: "clock") }
             sectionHeader("Pinned")
             ForEach(chats.pinnedSessions) { chatRow($0, symbol: "star") }
         case .work:
+            let work = AppServices.shared.work
             sectionHeader("Projects")
-            ListRow(symbol: "folder", title: "lay-x-app", meta: "3", selected: true)
-            ListRow(symbol: "folder", title: "mlx-bench", meta: "")
-            ListRow(symbol: "folder", title: "docs-site", meta: "")
+            ForEach(work.projects) { project in
+                let proposed = work.sessions[project.id]?.changeSet?.changes.count ?? 0
+                ListRow(symbol: "folder", title: project.name, meta: proposed > 0 ? "\(proposed)" : "",
+                        selected: project.id == work.currentID)
+                    .contentShape(Rectangle())
+                    .onTapGesture { work.currentID = project.id }
+                    .help(project.path)
+                    .contextMenu {
+                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: project.path)]) }
+                        Divider()
+                        Button("Remove from Lay X") { work.remove(project.id) }
+                    }
+            }
             ListRow(symbol: "plus", title: "Open folder…", meta: "")
+                .contentShape(Rectangle())
+                .onTapGesture { work.openFolder() }
         case .models:
             sectionHeader("Library")
             let library = AppServices.shared.models

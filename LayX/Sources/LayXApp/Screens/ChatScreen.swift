@@ -27,7 +27,6 @@ struct ChatScreen: View {
                 .padding(.bottom, 14)
         }
         .animation(.easeOut(duration: 0.18), value: isEmpty)
-        .onAppear { state.ensureCurrentChat() }
     }
 
     // MARK: Header

@@ -1,28 +1,80 @@
+import AppKit
 import SwiftUI
+import LayXCore
 
 struct WorkScreen: View {
-    @State private var changes = Mock.changes
-    @State private var selectedFile = "ChatView.swift"
-    @State private var unified = true
-    @State private var refine = ""
-    @State private var toast: String?
+    @Environment(InferenceStatusModel.self) private var inference
+    private var projects: WorkProjects { AppServices.shared.work }
 
+    var body: some View {
+        Group {
+            if let project = projects.current, let session = projects.session(for: project) {
+                WorkProjectView(session: session, branch: WorkProjects.gitBranch(of: session.workspace.root))
+                    .id(project.id)
+            } else {
+                noProject
+            }
+        }
+    }
+
+    private var noProject: some View {
+        VStack(spacing: 0) {
+            ScreenHeader {
+                Text("Work").font(LX.F.title)
+            } trailing: {
+                Text("read-only until approved").font(LX.F.mono(11)).foregroundStyle(LX.C.secondary)
+            }
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("PROJECT · ON-DEVICE").font(LX.F.mono(11)).kerning(0.9).foregroundStyle(LX.C.accent)
+                    Text("Open a project folder").font(LX.F.display).kerning(-0.4)
+                    Text("Lay X reads files only inside the folder you choose, proposes changes as a diff, and writes nothing until you approve.")
+                        .font(LX.F.body).foregroundStyle(LX.C.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                if let error = projects.error {
+                    Text(error).font(LX.F.caption).foregroundStyle(LX.C.error)
+                }
+                LXButton(title: "Open folder…", symbol: "folder", kind: .primary) { projects.openFolder() }
+            }
+            .frame(width: 520)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+struct WorkProjectView: View {
+    @Bindable var session: WorkSession
+    let branch: String?
+    @Environment(InferenceStatusModel.self) private var inference
+    @State private var unified = true
+    @State private var expanded: Set<String> = []
+    @State private var collapsed: Set<String> = []
+    @State private var request = ""
+    @State private var preview: TextFile?
+
+    private var changes: [ProposedChange] { session.changeSet?.changes ?? [] }
     private var selectedCount: Int { changes.filter(\.selected).count }
+    private var focusedChange: ProposedChange? { changes.first { $0.path == session.focusPath } }
 
     var body: some View {
         VStack(spacing: 0) {
             ScreenHeader {
-                Label("lay-x-app", systemImage: "folder").font(LX.F.ui(13, .semibold)).labelStyle(.titleAndIcon)
+                Label(session.workspace.name, systemImage: "folder").font(LX.F.ui(13, .semibold)).labelStyle(.titleAndIcon)
                     .foregroundStyle(LX.C.primary)
-                Text("~/Work/Lay-X").font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary)
-                HStack(spacing: 5) { Image(systemName: "arrow.triangle.branch"); Text("main") }
-                    .font(LX.F.mono(10.5)).foregroundStyle(Color(hex: 0xC9CBD6))
-                    .padding(.horizontal, 7).frame(height: 20)
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                Text((session.workspace.root.path as NSString).abbreviatingWithTildeInPath).font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary)
+                    .lineLimit(1).truncationMode(.middle)
+                if let branch {
+                    HStack(spacing: 5) { Image(systemName: "arrow.triangle.branch"); Text(branch) }
+                        .font(LX.F.mono(10.5)).foregroundStyle(Color(hex: 0xC9CBD6))
+                        .padding(.horizontal, 7).frame(height: 20)
+                        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                }
             } trailing: {
                 HStack(spacing: 8) {
-                    Text("\(changes.count) proposed").foregroundStyle(LX.C.warn)
-                    Text("·").foregroundStyle(LX.C.tertiary)
+                    if !changes.isEmpty {
+                        Text("\(changes.count) proposed").foregroundStyle(LX.C.warn)
+                        Text("·").foregroundStyle(LX.C.tertiary)
+                    }
                     Text("read-only until approved").foregroundStyle(LX.C.secondary)
                 }
                 .font(LX.F.mono(11))
@@ -31,80 +83,160 @@ struct WorkScreen: View {
             HStack(spacing: 0) {
                 fileTree.frame(width: 232)
                 Rectangle().fill(LX.C.divider).frame(width: 1)
-                diffPane.frame(maxWidth: .infinity)
+                centerPane.frame(maxWidth: .infinity)
                 Rectangle().fill(LX.C.divider).frame(width: 1)
                 assistant.frame(width: 340)
             }
         }
         .overlay(alignment: .bottom) {
-            if let toast { Toast(text: toast).padding(.bottom, 70).transition(.move(edge: .bottom).combined(with: .opacity)) }
+            if let notice = session.notice {
+                Toast(text: notice).padding(.bottom, 70)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .task(id: notice) {
+                        try? await Task.sleep(for: .seconds(3))
+                        if session.notice == notice { session.clearMessages() }
+                    }
+            }
         }
-        .animation(LX.M.panel, value: toast)
+        .animation(LX.M.panel, value: session.notice)
+        .onChange(of: session.focusPath) { loadPreview() }
+        .onChange(of: session.changeSet) { loadPreview() }
+        .onAppear { loadPreview() }
     }
 
     // MARK: Files
+
+    private var visibleEntries: [WorkspaceEntry] {
+        session.entries.filter { entry in
+            var parts = entry.path.split(separator: "/").map(String.init)
+            parts.removeLast()
+            var prefix = ""
+            for p in parts {
+                prefix = prefix.isEmpty ? p : "\(prefix)/\(p)"
+                if !isExpanded(prefix) { return false }
+            }
+            return true
+        }
+    }
+
+    /// Top-level folders and folders containing proposed changes start expanded; the user can toggle any.
+    private func isExpanded(_ folder: String) -> Bool {
+        if collapsed.contains(folder) { return false }
+        if expanded.contains(folder) { return true }
+        return changes.contains { $0.path.hasPrefix(folder + "/") } || !folder.contains("/")
+    }
+
     private var fileTree: some View {
         VStack(alignment: .leading, spacing: 1) {
             SectionLabel(text: "Files").padding(.horizontal, 8).padding(.bottom, 8)
-            ForEach(Mock.tree) { node in
-                let selected = node.name == selectedFile
-                HStack(spacing: 5) {
-                    if node.isFolder {
-                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(LX.C.tertiary).frame(width: 10)
-                    } else { Color.clear.frame(width: 10) }
-                    Image(systemName: node.isFolder ? "folder" : "doc")
-                        .font(.system(size: 11)).foregroundStyle(node.isFolder ? LX.C.accent : LX.C.tertiary)
-                    Text(node.name).font(LX.F.bodySmall).lineLimit(1)
-                    Spacer(minLength: 4)
-                    if let s = node.status {
-                        Text(s).font(LX.F.mono(10.5)).foregroundStyle(s == "A" ? LX.C.ok : LX.C.warn)
-                    }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(visibleEntries + newFileEntries) { node in fileRow(node) }
                 }
-                .foregroundStyle(selected ? Color.white : Color(hex: 0xC9CBD6))
-                .padding(.leading, 8 + CGFloat(node.depth) * 14).padding(.trailing, 8)
-                .frame(height: 26)
-                .background(RoundedRectangle(cornerRadius: LX.R.sm).fill(LX.C.accent.opacity(selected ? 0.12 : 0)))
-                .overlay(RoundedRectangle(cornerRadius: LX.R.sm).strokeBorder(LX.C.accent.opacity(selected ? 0.18 : 0), lineWidth: 1))
-                .contentShape(Rectangle())
-                .onTapGesture { if !node.isFolder { selectedFile = node.name } }
             }
-            Spacer()
+            .scrollIndicators(.hidden)
         }
         .padding(.horizontal, 6).padding(.vertical, 12)
     }
 
-    // MARK: Diff
-    private var diffPane: some View {
+    /// Files the proposal would create (shown in the tree with "A").
+    private var newFileEntries: [WorkspaceEntry] {
+        changes.filter { $0.kind == .create }.map { WorkspaceEntry(path: $0.path, isDirectory: false, size: 0) }
+    }
+
+    private func fileRow(_ node: WorkspaceEntry) -> some View {
+        let selected = node.path == session.focusPath
+        let status = changes.first { $0.path == node.path }?.status
+        return HStack(spacing: 5) {
+            if node.isDirectory {
+                Image(systemName: isExpanded(node.path) ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .semibold)).foregroundStyle(LX.C.tertiary).frame(width: 10)
+            } else { Color.clear.frame(width: 10) }
+            Image(systemName: node.isDirectory ? "folder" : "doc")
+                .font(.system(size: 11)).foregroundStyle(node.isDirectory ? LX.C.accent : LX.C.tertiary)
+            Text(node.name).font(LX.F.bodySmall).lineLimit(1)
+            Spacer(minLength: 4)
+            if let status {
+                Text(status).font(LX.F.mono(10.5)).foregroundStyle(status == "A" ? LX.C.ok : LX.C.warn)
+            }
+        }
+        .foregroundStyle(selected ? Color.white : Color(hex: 0xC9CBD6))
+        .padding(.leading, 8 + CGFloat(node.depth) * 14).padding(.trailing, 8)
+        .frame(height: 26)
+        .background(RoundedRectangle(cornerRadius: LX.R.sm).fill(LX.C.accent.opacity(selected ? 0.12 : 0)))
+        .overlay(RoundedRectangle(cornerRadius: LX.R.sm).strokeBorder(LX.C.accent.opacity(selected ? 0.18 : 0), lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if node.isDirectory {
+                if isExpanded(node.path) { collapsed.insert(node.path); expanded.remove(node.path) }
+                else { expanded.insert(node.path); collapsed.remove(node.path) }
+            } else {
+                session.focusPath = node.path
+            }
+        }
+    }
+
+    // MARK: Diff / preview
+
+    private func loadPreview() {
+        guard let path = session.focusPath, focusedChange == nil else { preview = nil; return }
+        preview = try? TextFile.read(path, in: session.workspace)
+    }
+
+    private var centerPane: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "doc").font(.system(size: 12)).foregroundStyle(LX.C.secondary)
-                Text("Sources/LayX/Chat/\(selectedFile)").font(LX.F.ui(12.5, .medium))
-                Text("\(Text("+6 ").foregroundStyle(LX.C.ok))\(Text("−3").foregroundStyle(LX.C.error))").font(LX.F.mono(11))
+                Text(session.focusPath ?? "No file selected").font(LX.F.ui(12.5, .medium)).lineLimit(1).truncationMode(.middle)
+                if let c = focusedChange {
+                    Text("\(Text("+\(c.stats.added) ").foregroundStyle(LX.C.ok))\(Text("−\(c.stats.removed)").foregroundStyle(LX.C.error))")
+                        .font(LX.F.mono(11))
+                } else if preview != nil {
+                    Text("read-only").font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary)
+                }
                 Spacer()
-                Segmented(options: [(true, "Unified"), (false, "Split")], selection: $unified)
+                if focusedChange != nil {
+                    Segmented(options: [(true, "Unified"), (false, "Split")], selection: $unified)
+                }
             }
             .padding(.horizontal, 14).frame(height: 40)
             Rectangle().fill(LX.C.divider).frame(height: 1)
 
             ScrollView([.vertical, .horizontal]) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Mock.diff) { line in DiffRow(line: line) }
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if let c = focusedChange {
+                        if unified {
+                            ForEach(c.diff) { line in DiffRow(line: line) }
+                        } else {
+                            ForEach(SplitDiff.rows(c.diff)) { row in SplitDiffRow(row: row) }
+                        }
+                    } else if let file = preview {
+                        ForEach(Array(LineDiff.lines(file.text).enumerated()), id: \.offset) { i, line in
+                            DiffRow(line: DiffLine(id: i + 1, kind: .context, old: i + 1, new: nil, text: line))
+                        }
+                    } else {
+                        Text(session.focusPath == nil ? "Select a file to view it, or describe a change on the right."
+                             : "This file can’t be previewed (binary or too large).")
+                            .font(LX.F.body).foregroundStyle(LX.C.tertiary).padding(16)
+                    }
                 }
                 .padding(.vertical, 10)
             }
 
             Rectangle().fill(LX.C.divider).frame(height: 1)
             HStack(spacing: 8) {
-                Text("\(selectedCount) of \(changes.count) selected · no file is written until you apply")
+                Text(changes.isEmpty ? "No proposal · no file is written until you apply"
+                     : "\(selectedCount) of \(changes.count) selected · no file is written until you apply")
                     .font(LX.F.ui(12)).foregroundStyle(LX.C.secondary).lineLimit(1)
                 Spacer()
-                LXButton(title: "Reject all", shortcut: "⌘⌫", kind: .danger) { flash("Proposal rejected — nothing was changed") }
+                LXButton(title: "Reject all", kind: .danger) { session.reject() }
                     .keyboardShortcut(.delete, modifiers: .command)
-                LXButton(title: "Apply \(selectedCount) changes", symbol: "checkmark", shortcut: "⌘↩", kind: .primary) {
-                    flash("Applied \(selectedCount) changes (mock — no files written)")
+                    .disabled(changes.isEmpty || session.phase == .applying)
+                LXButton(title: "Apply \(selectedCount) change\(selectedCount == 1 ? "" : "s")", symbol: "checkmark", kind: .primary) {
+                    session.apply()
                 }
-                .keyboardShortcut(.return, modifiers: .command)
-                .disabled(selectedCount == 0)
+                .keyboardShortcut(.return, modifiers: [.command, .shift])
+                .disabled(selectedCount == 0 || session.phase != .proposed)
             }
             .padding(.horizontal, 14).frame(height: 52)
             .background(Color.black.opacity(0.15))
@@ -112,51 +244,87 @@ struct WorkScreen: View {
     }
 
     // MARK: Assistant
+
+    private var modelName: String {
+        inference.loadedModel.flatMap { ModelRepoID($0.id) }.map(ModelDisplay.name) ?? "Assistant"
+    }
+
+    private var busy: Bool { session.phase == .reading || session.phase == .generating }
+
     private var assistant: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("You").font(LX.F.ui(11.5, .semibold)).foregroundStyle(LX.C.secondary)
-                    Text("チャットの再描画が重いので、ストリーミング部分をリファクタして").font(LX.F.body).foregroundStyle(LX.C.body).lineSpacing(4)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Qwen3 30B-A3B").font(LX.F.ui(11.5, .semibold)).foregroundStyle(LX.C.accentText)
-                    Text("3ファイルの変更を提案します。StreamBuffer を新設し、ChatView を段落単位の遅延描画に変えます。")
-                        .font(LX.F.body).foregroundStyle(LX.C.body).lineSpacing(4)
-                    Text("read 6 files · 2.4k ctx · 44.1 tok/s").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary).padding(.top, 4)
-                }
-            }
-            .padding(14)
-
-            SectionLabel(text: "Proposed changes").padding(.horizontal, 14).padding(.bottom, 6)
-            VStack(spacing: 2) {
-                ForEach($changes) { $change in
-                    HStack(alignment: .top, spacing: 10) {
-                        Checkbox(isOn: $change.selected)
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(change.status).font(LX.F.mono(10.5)).foregroundStyle(change.status == "A" ? LX.C.ok : LX.C.warn)
-                                Text(change.file).font(LX.F.bodySmall)
-                                Spacer()
-                                Text(change.stats).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(session.turns) { turn in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(turn.role == .user ? "You" : modelName).font(LX.F.ui(11.5, .semibold))
+                                .foregroundStyle(turn.role == .user ? LX.C.secondary : LX.C.accentText)
+                            Text(turn.text).font(LX.F.body).foregroundStyle(LX.C.body).lineSpacing(4).textSelection(.enabled)
+                            if let note = turn.note {
+                                Text(note).font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary).padding(.top, 4)
                             }
-                            Text(change.summary).font(LX.F.caption).foregroundStyle(LX.C.secondary)
                         }
                     }
-                    .padding(.horizontal, 10).padding(.vertical, 9)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(LX.C.accent.opacity(change.file == selectedFile ? 0.10 : 0)))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(LX.C.accent.opacity(change.file == selectedFile ? 0.2 : 0), lineWidth: 1))
-                    .contentShape(Rectangle())
-                    .onTapGesture { selectedFile = change.file }
+                    if busy {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(modelName).font(LX.F.ui(11.5, .semibold)).foregroundStyle(LX.C.accentText)
+                                Text(session.phase == .reading ? "reading files…" : "writing proposal…")
+                                    .font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan)
+                            }
+                            let live = ProposalParser.parse(session.liveText).summary
+                            if !live.isEmpty {
+                                Text(live).font(LX.F.body).foregroundStyle(LX.C.body).lineSpacing(4)
+                            }
+                            BlinkingCaret()
+                        }
+                    }
+                    if let error = session.error {
+                        Text(error).font(LX.F.caption).foregroundStyle(LX.C.error).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if session.turns.isEmpty && !busy {
+                        Text("Describe a change below. Lay X reads the relevant files, then shows the proposed edits as a diff for you to apply or reject.")
+                            .font(LX.F.body).foregroundStyle(LX.C.tertiary).lineSpacing(4)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .defaultScrollAnchor(.bottom)
+            .frame(maxHeight: changes.isEmpty ? .infinity : 260)
+
+            if !changes.isEmpty {
+                SectionLabel(text: "Proposed changes").padding(.horizontal, 14).padding(.bottom, 6)
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(changes) { change in changeRow(change) }
+                    }
+                    .padding(.horizontal, 10)
+                }
+                if let rejected = session.changeSet?.rejected, !rejected.isEmpty {
+                    Text("Skipped: " + rejected.map { "\($0.path) — \($0.reason)" }.joined(separator: "; "))
+                        .font(LX.F.caption).foregroundStyle(LX.C.tertiary).padding(.horizontal, 14).padding(.top, 6)
                 }
             }
-            .padding(.horizontal, 10)
 
-            Spacer()
+            Spacer(minLength: 0)
 
             VStack(alignment: .leading, spacing: 6) {
-                TextField("Refine the proposal…", text: $refine).textFieldStyle(.plain).font(LX.F.body)
-                HStack { Text("@file  /test").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary); Spacer() }
+                TextField(changes.isEmpty ? "Describe a change…" : "Refine the proposal…", text: $request, axis: .vertical)
+                    .textFieldStyle(.plain).font(LX.F.body).lineLimit(1...6)
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard press.modifiers.contains(.shift) else { return .ignored }
+                        request += "\n"
+                        return .handled
+                    }
+                    .onSubmit { submit() }
+                HStack {
+                    Text("@path includes a file").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary)
+                    Spacer()
+                    if busy {
+                        LXButton(title: "Stop") { session.cancel() }.keyboardShortcut(.escape, modifiers: [])
+                    }
+                }
             }
             .padding(.horizontal, 12).padding(.top, 11).padding(.bottom, 6)
             .well(radius: LX.R.lg, fill: Color(hex: 0x080910, alpha: 0.6))
@@ -164,11 +332,38 @@ struct WorkScreen: View {
         }
     }
 
-    private func flash(_ text: String) {
-        toast = text
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { toast = nil }
+    private func changeRow(_ change: ProposedChange) -> some View {
+        let focused = change.path == session.focusPath
+        return HStack(alignment: .top, spacing: 10) {
+            Checkbox(isOn: Binding(get: { change.selected }, set: { _ in session.toggle(change.path) }))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(change.status).font(LX.F.mono(10.5)).foregroundStyle(change.status == "A" ? LX.C.ok : LX.C.warn)
+                    Text((change.path as NSString).lastPathComponent).font(LX.F.bodySmall).lineLimit(1)
+                    Spacer()
+                    Text(change.kind == .create ? "+\(change.stats.added)" : "+\(change.stats.added) −\(change.stats.removed)")
+                        .font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
+                }
+                Text(change.kind == .create ? "New file · \(change.path)" : change.path)
+                    .font(LX.F.caption).foregroundStyle(LX.C.secondary).lineLimit(1).truncationMode(.middle)
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 8).fill(LX.C.accent.opacity(focused ? 0.10 : 0)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(LX.C.accent.opacity(focused ? 0.2 : 0), lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture { session.focusPath = change.path }
+    }
+
+    private func submit() {
+        let text = request.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !busy else { return }
+        request = ""
+        session.propose(text, refining: session.changeSet != nil)
     }
 }
+
+// MARK: - Diff rows
 
 struct DiffRow: View {
     let line: DiffLine
@@ -179,7 +374,7 @@ struct DiffRow: View {
                 .font(LX.F.mono(11)).foregroundStyle(Color(hex: 0x7A86C8))
                 .padding(.leading, 14).frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
                 .background(LX.C.accent.opacity(0.05))
-                .padding(.top, line.old == nil && line.text.contains("-88") ? 14 : 0)
+                .padding(.top, line.id == 0 ? 0 : 14)
         default:
             HStack(spacing: 0) {
                 Text(line.old.map(String.init) ?? "").frame(width: 38, alignment: .trailing).padding(.trailing, 6)
@@ -210,5 +405,66 @@ struct DiffRow: View {
         case .removed: LX.C.errorBar
         default: .clear
         }
+    }
+}
+
+/// Side-by-side rows built from a unified diff (removed lines on the left, added on the right).
+enum SplitDiff {
+    struct Row: Identifiable {
+        let id: Int
+        var hunk: String?
+        var left: DiffLine?
+        var right: DiffLine?
+    }
+
+    static func rows(_ lines: [DiffLine]) -> [Row] {
+        var out: [Row] = []
+        var removed: [DiffLine] = [], added: [DiffLine] = []
+        func flush() {
+            for i in 0..<max(removed.count, added.count) {
+                out.append(Row(id: out.count, left: i < removed.count ? removed[i] : nil, right: i < added.count ? added[i] : nil))
+            }
+            removed = []; added = []
+        }
+        for l in lines {
+            switch l.kind {
+            case .hunk: flush(); out.append(Row(id: out.count, hunk: l.text))
+            case .removed: removed.append(l)
+            case .added: added.append(l)
+            case .context: flush(); out.append(Row(id: out.count, left: l, right: l))
+            }
+        }
+        flush()
+        return out
+    }
+}
+
+struct SplitDiffRow: View {
+    let row: SplitDiff.Row
+    var body: some View {
+        if let hunk = row.hunk {
+            DiffRow(line: DiffLine(id: row.id, kind: .hunk, old: nil, new: nil, text: hunk))
+        } else {
+            HStack(spacing: 0) {
+                side(row.left, number: row.left?.old, isLeft: true).frame(width: 520, alignment: .leading)
+                Rectangle().fill(LX.C.divider).frame(width: 1)
+                side(row.right, number: row.right?.new, isLeft: false).frame(width: 520, alignment: .leading)
+            }
+            .frame(height: 22)
+        }
+    }
+
+    @ViewBuilder private func side(_ line: DiffLine?, number: Int?, isLeft: Bool) -> some View {
+        let changed = line.map { $0.kind != .context } ?? false
+        HStack(spacing: 0) {
+            Text(number.map(String.init) ?? "").frame(width: 38, alignment: .trailing).padding(.trailing, 10)
+            Text(line.map { Syntax.highlight($0.text) } ?? AttributedString("")).fixedSize()
+            Spacer(minLength: 0)
+        }
+        .font(LX.F.mono(12))
+        .foregroundStyle(Color(hex: 0x4E5160))
+        .frame(maxHeight: .infinity)
+        .background(changed ? (isLeft ? LX.C.errorBar.opacity(0.09) : LX.C.ok.opacity(0.08)) : .clear)
+        .overlay(alignment: .leading) { Rectangle().fill(changed ? (isLeft ? LX.C.errorBar : LX.C.ok) : .clear).frame(width: 2) }
     }
 }

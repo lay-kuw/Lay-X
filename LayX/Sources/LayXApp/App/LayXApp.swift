@@ -34,6 +34,7 @@ struct LayXApplication: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat") { state.newChat() }.keyboardShortcut("n")
+                Button("Open Project…") { state.screen = .work; AppServices.shared.work.openFolder() }.keyboardShortcut("o")
             }
             CommandMenu("Go") {
                 ForEach(Screen.allCases) { screen in
@@ -161,9 +162,11 @@ final class AppState: ObservableObject {
         return id
     }
 
+    /// Shows a blank chat. The session itself is created on the first send, so an empty "Untitled"
+    /// never appears in the sidebar.
     func newChat() {
         renamingChat = false
-        currentChatID = chats.newSession()
+        currentChatID = nil
         draft = ""
         screen = .chat
     }
