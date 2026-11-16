@@ -14,34 +14,54 @@ struct SettingsScreen: View {
         case shortcuts = "Shortcuts"
         case advanced = "Advanced"
         var id: String { rawValue }
+
+        /// Extra words that find a category from the search field.
+        var keywords: [String] {
+            switch self {
+            case .general: ["launch", "login", "window", "dock", "quit"]
+            case .soul: ["persona", "system prompt", "personality", "instructions"]
+            case .inference: ["model", "memory", "kv", "cache", "temperature", "top-p", "tokens", "storage", "unload", "work"]
+            case .mini: ["shortcut", "hotkey", "option space", "panel"]
+            case .privacy: ["pinned", "chats", "delete", "history", "database", "privacy"]
+            case .api: ["server", "port", "lan", "network", "key", "openai"]
+            case .appearance: ["glow", "glass", "transparency", "color", "theme"]
+            case .shortcuts: ["keyboard", "hotkey", "shortcut"]
+            case .advanced: ["reset", "cache", "downloads", "logs", "about", "version"]
+            }
+        }
+
+        static func matching(_ query: String) -> [Category] {
+            let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+            guard !q.isEmpty else { return allCases }
+            return allCases.filter { $0.rawValue.lowercased().contains(q) || $0.keywords.contains { $0.contains(q) } }
+        }
     }
 
-    enum KVQuant: Hashable { case off, eight, four }
 
     @EnvironmentObject var state: AppState
     @AppStorage(LX.Glass.storageKey) private var transparency = LX.Glass.defaultValue
     @AppStorage(LX.Glow.storageKey) private var glowRaw = LX.Glow.violet.rawValue
-    @State private var followSystem = true
-    @State private var search = ""
-    @State private var defaultWork = "Qwen3 30B-A3B · 4-bit"
-    @State private var keepLoaded = "15 minutes"
-    @State private var memoryLimit = 40.0
-    @State private var kv: KVQuant = .eight
-    @State private var promptCache = true
+    @AppStorage(AppearancePreferences.followReduceTransparencyKey) private var followSystem = true
+    @AppStorage(EnginePreferences.keepLoadedKey) private var keepLoaded = 15
+    @AppStorage(EnginePreferences.memoryLimitKey) private var memoryLimitGB = 0.0
+    @AppStorage(EnginePreferences.kvBitsKey) private var kvBits = 0
+    @AppStorage(WorkProjects.defaultWorkModelKey) private var defaultWorkID = ""
     @AppStorage(ChatPreferences.temperatureKey) private var temperature = ChatPreferences.defaultTemperature
     @AppStorage(ChatPreferences.topPKey) private var topP = ChatPreferences.defaultTopP
     @AppStorage(ChatPreferences.maxTokensKey) private var maxTokensValue = ChatPreferences.defaultMaxTokens
     @AppStorage(ChatPreferences.defaultChatModelKey) private var defaultChatID = ""
     @State private var maxTokens = ""
 
-    private let modelOptions = ["Qwen3 14B · 4-bit", "Qwen3 30B-A3B · 4-bit", "Gemma 3 27B · 4-bit", "Phi-4 mini · 8-bit"]
 
     var body: some View {
         VStack(spacing: 0) {
             ScreenHeader {
                 Text(state.settingsCategory.rawValue).font(LX.F.title)
             } trailing: {
-                LXField(placeholder: "Search settings", text: $search, symbol: "magnifyingglass").frame(width: 220)
+                LXField(placeholder: "Search settings", text: $state.settingsSearch, symbol: "magnifyingglass").frame(width: 220)
+                    .onSubmit {
+                        if let first = Category.matching(state.settingsSearch).first { state.settingsCategory = first }
+                    }
             }
             ScrollView {
                 Group {
@@ -50,10 +70,11 @@ struct SettingsScreen: View {
                     case .inference: inferencePage
                     case .mini: miniChatPage
                     case .soul: soulPage
-                    default:
-                        Text("This section is not part of the design preview yet.")
-                            .font(LX.F.body).foregroundStyle(LX.C.tertiary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    case .general: generalPage
+                    case .privacy: privacyPage
+                    case .api: apiPage
+                    case .shortcuts: shortcutsPage
+                    case .advanced: advancedPage
                     }
                 }
                 .frame(width: 760)
@@ -129,9 +150,14 @@ struct SettingsScreen: View {
                 VStack(alignment: .leading, spacing: 22) {
                     group("Default model") {
                         row("Chat & Mini Chat", "Used for new chats and Mini Chat") { defaultChatMenu }
-                        row("Work", "Larger context for multi-file edits") { menu($defaultWork, modelOptions) }
+                        row("Work", "Used for project proposals (larger models follow the edit format better)") { defaultWorkMenu }
                         row("Keep model loaded", "Unload after a period of inactivity to free memory") {
-                            menu($keepLoaded, ["5 minutes", "15 minutes", "1 hour", "Always"], width: 140)
+                            Menu {
+                                ForEach(EnginePreferences.keepLoadedOptions, id: \.minutes) { o in
+                                    Button(o.label) { keepLoaded = o.minutes }
+                                }
+                            } label: { menuLabel(EnginePreferences.keepLoadedOptions.first { $0.minutes == keepLoaded }?.label ?? "15 minutes", width: 140) }
+                            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                         }
                     }
                     group("Storage") {
@@ -152,14 +178,15 @@ struct SettingsScreen: View {
                         Text(storageError).font(LX.F.caption).foregroundStyle(LX.C.error)
                     }
                     group("Memory") {
-                        row("GPU memory limit", "Upper bound for weights + KV cache (wired memory)") {
-                            GradientSlider(value: $memoryLimit, range: 8...64) { "\(Int($0)) GB" }
+                        row("Model memory limit", "Largest model Lay X will load, and MLX's soft memory cap. Auto = 75% of RAM") {
+                            GradientSlider(value: Binding(get: { memoryLimitGB == 0 ? (EnginePreferences.physicalGB * 0.75).rounded() : memoryLimitGB },
+                                                          set: { memoryLimitGB = $0.rounded() }),
+                                           range: 8...max(16, (EnginePreferences.physicalGB * 0.9).rounded())) {
+                                memoryLimitGB == 0 ? "Auto" : "\(Int($0)) GB"
+                            }
                         }
                         row("KV cache quantization", "8-bit halves cache size with negligible quality loss") {
-                            Segmented(options: [(KVQuant.off, "Off"), (.eight, "8-bit"), (.four, "4-bit")], selection: $kv, mono: true)
-                        }
-                        row("Prompt cache", "Reuse prefill across turns of the same chat") {
-                            Toggle("", isOn: $promptCache).toggleStyle(LXToggleStyle()).labelsHidden().fixedSize()
+                            Segmented(options: [(0, "Off"), (8, "8-bit"), (4, "4-bit")], selection: $kvBits, mono: true)
                         }
                     }
                     group("Sampling defaults") {
@@ -290,7 +317,7 @@ struct SettingsScreen: View {
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
     }
 
-    private func menuLabel(_ text: String, width: CGFloat) -> some View {
+    func menuLabel(_ text: String, width: CGFloat) -> some View {
         HStack {
             Text(text).font(LX.F.ui(12.5)).foregroundStyle(LX.C.primary).lineLimit(1)
             Spacer()
@@ -318,7 +345,18 @@ struct SettingsScreen: View {
         }
     }
 
-    private func group<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
+    private var defaultWorkMenu: some View {
+        let library = AppServices.shared.models
+        let current = library.model(defaultWorkID).map { ModelDisplay.name($0.id) } ?? "Same as Chat"
+        return Menu {
+            Button("Same as Chat") { defaultWorkID = "" }
+            Divider()
+            ForEach(library.installed) { m in Button(ModelDisplay.name(m.id)) { defaultWorkID = m.id.description } }
+        } label: { menuLabel(current, width: 200) }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+    }
+
+    func group<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             SectionLabel(text: title).padding(.leading, 2)
             VStack(spacing: 0) { content() }
@@ -327,7 +365,7 @@ struct SettingsScreen: View {
         }
     }
 
-    private func row<C: View>(_ title: String, _ help: String?, @ViewBuilder control: () -> C) -> some View {
+    func row<C: View>(_ title: String, _ help: String?, @ViewBuilder control: () -> C) -> some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(LX.F.body)

@@ -142,6 +142,16 @@ public actor InferenceCoordinator {
     public nonisolated func memory() async -> EngineMemory? { await engine.memory() }
     public nonisolated func resetPeakMemory() async { await engine.resetPeakMemory() }
 
+    /// Applies engine settings between generations (through the gate, so never mid-generation).
+    public func configure(_ settings: EngineSettings) async {
+        let ticket = UUID()
+        do { try await acquire(ticket, bypassLimit: true) } catch { return }
+        defer { release() }
+        await engine.configure(settings)
+    }
+
+    public nonisolated func clearCache() async { await engine.clearCache() }
+
     // MARK: Generation
 
     /// Streams a generation. Iteration order: zero or more `.text`, then `.finished`.

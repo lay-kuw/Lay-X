@@ -32,9 +32,8 @@ public actor MLXEngine: InferenceEngine {
     private var loadedID: String?
     private var contextLength: Int?
     private var generationTask: Task<Void, Never>?
+    private var settings = EngineSettings()
 
-    /// Fraction of physical memory the weights may use (the rest is left for KV cache, the app and the system).
-    public static let weightBudgetFraction = 0.75
 
     public init() {}
 
@@ -58,7 +57,7 @@ public actor MLXEngine: InferenceEngine {
 
         let weightBytes = Self.weightBytes(in: dir)
         let physical = Int64(ProcessInfo.processInfo.physicalMemory)
-        let budget = Int64(Double(physical) * Self.weightBudgetFraction)
+        let budget = settings.weightBudget(physicalMemory: physical)
         if weightBytes > budget {
             throw InferenceError.insufficientMemory(requiredBytes: weightBytes, availableBytes: budget)
         }
@@ -155,6 +154,7 @@ public actor MLXEngine: InferenceEngine {
             temperature: Float(request.parameters.temperature),
             topP: Float(request.parameters.topP))
         parameters.seed = request.parameters.seed
+        if let bits = settings.kvBits { parameters.kvBits = bits }
         if let rp = request.parameters.repetitionPenalty { parameters.repetitionPenalty = Float(rp) }
         let generateParameters = parameters
 
@@ -227,6 +227,17 @@ public actor MLXEngine: InferenceEngine {
 
     public func resetPeakMemory() async {
         Memory.peakMemory = 0
+    }
+
+    public func configure(_ settings: EngineSettings) async {
+        self.settings = settings
+        // MLX treats the limit as a soft cap: allocations beyond it wait for running work or fail.
+        let physical = Int64(ProcessInfo.processInfo.physicalMemory)
+        Memory.memoryLimit = Int(settings.weightBudget(physicalMemory: physical) + physical / 10)
+    }
+
+    public func clearCache() async {
+        Memory.clearCache()
     }
 
     // MARK: Helpers

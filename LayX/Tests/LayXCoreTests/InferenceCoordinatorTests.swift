@@ -165,6 +165,15 @@ import Testing
         #expect(empty.decodeTokensPerSecond == nil)
     }
 
+    @Test func engineSettingsBudgetAndValidation() {
+        let gb: Int64 = 1 << 30
+        #expect(EngineSettings().weightBudget(physicalMemory: 64 * gb) == 48 * gb)
+        #expect(EngineSettings(memoryLimitBytes: 20 * gb).weightBudget(physicalMemory: 64 * gb) == 20 * gb)
+        #expect(EngineSettings(memoryLimitBytes: 100 * gb).weightBudget(physicalMemory: 64 * gb) < 64 * gb)
+        #expect(EngineSettings(kvBits: 3).kvBits == nil)
+        #expect(EngineSettings(kvBits: 8).kvBits == 8)
+    }
+
     @Test func parametersAreClamped() {
         let p = GenerationParameters(temperature: 9, topP: 0, maxTokens: -5, repetitionPenalty: 10).validated()
         #expect(p.temperature == 2)

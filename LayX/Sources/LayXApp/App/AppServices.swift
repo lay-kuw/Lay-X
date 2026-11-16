@@ -22,6 +22,9 @@ final class AppServices {
     let performance: PerformanceModel
     private(set) var api: APIServerModel!
     private var memoryPressure: DispatchSourceMemoryPressure?
+    private var defaultsObserver: NSObjectProtocol?
+    private var appliedEngineSettings: EngineSettings?
+    private var idleTask: Task<Void, Never>?
 
     static let modelStorePathKey = "lx.modelStorePath"
 
@@ -67,6 +70,36 @@ final class AppServices {
         startMemoryPressureMonitor()
         inferenceStatus.startMemoryPolling(coordinator)
         api = APIServerModel(coordinator: coordinator, models: library)
+        applyEngineSettings()
+        defaultsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { AppServices.shared.applyEngineSettings() }
+        }
+        startIdleUnload()
+    }
+
+    /// Pushes Settings → Models & Inference engine values to the engine when they change.
+    func applyEngineSettings() {
+        let settings = EnginePreferences.engineSettings
+        guard settings != appliedEngineSettings else { return }
+        appliedEngineSettings = settings
+        let coordinator = self.coordinator
+        Task { await coordinator.configure(settings) }
+    }
+
+    /// "Keep model loaded": unloads the model after the configured idle time (never while generating).
+    private func startIdleUnload() {
+        let status = inferenceStatus, coordinator = self.coordinator
+        idleTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                let minutes = EnginePreferences.keepLoadedMinutes
+                guard minutes > 0, status.loadedModel != nil, !status.isGenerating,
+                      Date().timeIntervalSince(status.lastActivity) > Double(minutes * 60) else { continue }
+                if await coordinator.handleMemoryPressure() {
+                    Log.inference.info("Unloaded model after \(minutes) idle minutes")
+                }
+            }
+        }
     }
 
     /// The model used when a chat needs one and none is loaded: the configured default if installed, else the
@@ -106,6 +139,7 @@ final class InferenceStatusModel {
         task = Task { [weak self] in
             for await s in await coordinator.snapshots() {
                 guard let self else { return }
+                if s.activeClient != nil || s.model != self.snapshot.model { self.lastActivity = Date() }
                 if let m = s.lastMetrics, m != self.snapshot.lastMetrics, let id = s.model.loadedModel?.id {
                     self.metricsByModel[id] = m
                     self.history.insert(LiveSample(date: Date(), client: self.snapshot.activeClient ?? .chat, modelID: id, metrics: m), at: 0)
@@ -121,6 +155,8 @@ final class InferenceStatusModel {
     /// Recent generations across Chat / Mini Chat / Work / API / Benchmark — numbers only, no content.
     private(set) var history: [LiveSample] = []
     private(set) var engineMemory: EngineMemory?
+    /// Last time a model was loaded or a generation ran (idle unload).
+    private(set) var lastActivity = Date()
     private(set) var systemMemoryUsed: Int64?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
 

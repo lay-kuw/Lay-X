@@ -137,6 +137,29 @@ public protocol InferenceEngine: Sendable {
     func memory() async -> EngineMemory?
     /// Resets the engine's peak-memory counter (benchmarks). Default: no-op.
     func resetPeakMemory() async
+    /// Applies runtime settings (memory limit, KV-cache quantization). Default: no-op.
+    func configure(_ settings: EngineSettings) async
+    /// Releases cached buffers that aren't in use. Default: no-op.
+    func clearCache() async
+}
+
+/// Engine-level settings from Settings → Models & Inference.
+public struct EngineSettings: Sendable, Hashable, Codable {
+    /// Upper bound for model weights + KV cache, in bytes (`nil` = 75 % of RAM).
+    public var memoryLimitBytes: Int64?
+    /// KV-cache quantization bits (`nil` = off, 8 or 4).
+    public var kvBits: Int?
+
+    public init(memoryLimitBytes: Int64? = nil, kvBits: Int? = nil) {
+        self.memoryLimitBytes = memoryLimitBytes
+        self.kvBits = kvBits.flatMap { [4, 8].contains($0) ? $0 : nil }
+    }
+
+    /// Effective weight budget for load-time checks.
+    public func weightBudget(physicalMemory: Int64) -> Int64 {
+        let cap = Int64(Double(physicalMemory) * 0.9)
+        return min(memoryLimitBytes ?? Int64(Double(physicalMemory) * 0.75), cap)
+    }
 }
 
 extension InferenceEngine {
@@ -144,4 +167,6 @@ extension InferenceEngine {
     public func memory() async -> EngineMemory? { nil }
     /// Resets the engine's peak-memory counter (benchmarks).
     public func resetPeakMemory() async {}
+    public func configure(_ settings: EngineSettings) async {}
+    public func clearCache() async {}
 }

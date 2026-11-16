@@ -139,7 +139,10 @@ final class MiniChatModel {
 struct MiniChatView: View {
     @Bindable var model: MiniChatModel
     @Environment(InferenceStatusModel.self) private var inference
-    @AppStorage(LX.Glass.storageKey) private var transparency = LX.Glass.defaultValue
+    @AppStorage(LX.Glass.storageKey) private var storedTransparency = LX.Glass.defaultValue
+    @AppStorage(AppearancePreferences.followReduceTransparencyKey) private var followReduce = true
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    private var transparency: Double { followReduce && reduceTransparency ? 0 : storedTransparency }
     @FocusState private var focused: Bool
     @State private var selection: TextSelection?
 

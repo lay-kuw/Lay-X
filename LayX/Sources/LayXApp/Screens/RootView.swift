@@ -5,6 +5,8 @@ import LayXCore
 struct RootView: View {
     @EnvironmentObject var state: AppState
     @AppStorage(LX.Glass.storageKey) private var transparency = LX.Glass.defaultValue
+    @AppStorage(AppearancePreferences.followReduceTransparencyKey) private var followReduce = true
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage(LX.Glow.storageKey) private var glowRaw = LX.Glow.violet.rawValue
 
     var body: some View {
@@ -26,7 +28,7 @@ struct RootView: View {
             .padding(LX.S.s2)
         }
         .foregroundStyle(LX.C.primary)
-        .environment(\.glassTransparency, transparency)
+        .environment(\.glassTransparency, followReduce && reduceTransparency ? 0 : transparency)
         .environment(\.glowPreset, LX.Glow(rawValue: glowRaw) ?? .violet)
         .animation(.easeInOut(duration: 0.35), value: glowRaw)
         .ignoresSafeArea()
@@ -139,7 +141,7 @@ struct Sidebar: View {
             }
         case .settings:
             sectionHeader("Settings")
-            ForEach(SettingsScreen.Category.allCases) { c in
+            ForEach(SettingsScreen.Category.matching(state.settingsSearch)) { c in
                 ListRow(symbol: nil, title: c.rawValue, meta: "", selected: c == state.settingsCategory)
                     .contentShape(Rectangle())
                     .onTapGesture { state.settingsCategory = c }

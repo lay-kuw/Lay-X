@@ -21,7 +21,8 @@ struct LayXApplication: App {
     @StateObject private var state = AppState.shared
 
     var body: some Scene {
-        WindowGroup("Lay X") {
+        // A single main window: closing it keeps Lay X running (Mini Chat, API server); the Dock icon reopens it.
+        Window("Lay X", id: "main") {
             RootView()
                 .environmentObject(state)
                 .environment(AppServices.shared.inferenceStatus)
@@ -63,6 +64,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         GlobalHotKey.shared.start { MiniChatController.shared.toggle() }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        UserDefaults.standard.bool(forKey: AppearancePreferences.quitOnCloseKey)
     }
 
     /// Unpinned chats are memory-only: never let AppKit restore windows (and their content) on relaunch.
@@ -142,7 +147,8 @@ final class AppState: ObservableObject {
     static let shared = AppState()
 
     @Published var screen: Screen = .chat
-    @Published var settingsCategory: SettingsScreen.Category = .appearance
+    @Published var settingsCategory: SettingsScreen.Category = .general
+    @Published var settingsSearch = ""
     @Published var inspector = false
     @Published var modelsTab: ModelsScreen.Tab = .installed
 
