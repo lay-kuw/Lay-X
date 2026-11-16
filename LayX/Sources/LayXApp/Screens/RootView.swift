@@ -97,7 +97,8 @@ struct Sidebar: View {
             sectionHeader("Projects")
             ForEach(work.projects) { project in
                 let proposed = work.sessions[project.id]?.changeSet?.changes.count ?? 0
-                ListRow(symbol: "folder", title: project.name, meta: proposed > 0 ? "\(proposed)" : "",
+                let busy = work.sessions[project.id].map { $0.phase == .reading || $0.phase == .generating || $0.phase == .applying } ?? false
+                ListRow(symbol: busy ? "ellipsis" : "folder", title: project.name, meta: proposed > 0 ? "\(proposed)" : "",
                         selected: project.id == work.currentID)
                     .contentShape(Rectangle())
                     .onTapGesture { work.currentID = project.id }
@@ -201,6 +202,7 @@ struct NavRow: View {
                 if screen == .api, let api = AppServices.shared.api, api.isRunning {
                     HStack(spacing: 6) { LiveDot(); Text(":\(api.port)").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan) }
                 }
+                if screen == .work { WorkActivityIndicator() }
             }
             .foregroundStyle(selected ? Color.white : Color(hex: 0xC9CBD6))
             .padding(.horizontal, 8)
@@ -240,6 +242,24 @@ struct ListRow: View {
         .frame(height: LX.S.row)
         .background(RoundedRectangle(cornerRadius: LX.R.md).fill(Color.white.opacity(selected ? 0.07 : (hover ? 0.05 : 0))))
         .onHover { h in withAnimation(LX.M.hover) { hover = h } }
+    }
+}
+
+/// Work status in the sidebar: animated while a proposal is being read/written, a warm dot while changes
+/// wait for approval, nothing when idle.
+struct WorkActivityIndicator: View {
+    var body: some View {
+        let sessions = AppServices.shared.work.sessions.values
+        if sessions.contains(where: { $0.phase == .reading || $0.phase == .generating || $0.phase == .applying }) {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 11, weight: .bold)).foregroundStyle(LX.C.liveCyan)
+                .symbolEffect(.variableColor.iterative, options: .repeating)
+                .help("Work is preparing a proposal")
+        } else if sessions.contains(where: { $0.changeSet != nil }) {
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: 11, weight: .semibold)).foregroundStyle(LX.C.warn)
+                .help("Changes are waiting for your approval")
+        }
     }
 }
 

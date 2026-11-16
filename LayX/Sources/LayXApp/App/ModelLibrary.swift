@@ -261,6 +261,28 @@ enum ModelDisplay {
         return merged.joined(separator: " ")
     }
 
+    /// Display name without the variant, plus the variant (e.g. `Qwen3.6-35B-A3B-OptiQ-4bit` →
+    /// ("Qwen3.6 35B-A3B", "OptiQ")). The variant is what follows the parameter size, minus quantization tokens.
+    static func split(_ id: ModelRepoID) -> (name: String, variant: String?) {
+        let full = name(id)
+        let words = full.split(separator: " ").map(String.init)
+        guard let sizeIndex = words.firstIndex(where: { $0.range(of: #"^\d+(\.\d+)?[BM](-A\d+(\.\d+)?B)?$"#, options: .regularExpression) != nil }),
+              sizeIndex < words.count - 1 else { return (full, nil) }
+        let quantWords: Set<String> = ["MLX", "mlx", "Instruct", "it", "Chat"]
+        let rest = words[(sizeIndex + 1)...].filter { !quantWords.contains($0) && $0.range(of: #"^\d+bit$"#, options: .regularExpression) == nil }
+        return (words[...sizeIndex].joined(separator: " "), rest.isEmpty ? nil : rest.joined(separator: " "))
+    }
+
+    /// "OptiQ · 4-bit · 256K" (+ size when `withSize`).
+    static func subtitle(_ m: InstalledModel, withSize: Bool) -> String {
+        var parts: [String] = []
+        if let v = split(m.id).variant { parts.append(v) }
+        if let b = m.manifest.quantizationBits { parts.append("\(b)-bit") }
+        if let c = m.manifest.contextLength { parts.append(context(c).uppercased()) }
+        if withSize { parts.append(bytes(m.diskBytes)) }
+        return parts.joined(separator: " · ")
+    }
+
     /// Parameter size parsed from the name ("0.6B", "30B MoE"); nil when not stated.
     static func parameters(_ id: ModelRepoID) -> String? {
         let n = id.name

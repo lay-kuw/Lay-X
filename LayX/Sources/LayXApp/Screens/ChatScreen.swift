@@ -4,6 +4,7 @@ import LayXCore
 
 struct ChatScreen: View {
     @EnvironmentObject var state: AppState
+    @State private var pickerOpen = false
     @Environment(InferenceStatusModel.self) private var inference
     private var chats: ChatSessionStore { AppServices.shared.chats }
     private var session: ChatSession? { chats.session(state.currentChatID) }
@@ -27,12 +28,23 @@ struct ChatScreen: View {
                 .padding(.bottom, 14)
         }
         .animation(.easeOut(duration: 0.18), value: isEmpty)
+        .overlay(alignment: .topLeading) {
+            if pickerOpen {
+                ZStack(alignment: .topLeading) {
+                    // Click outside to dismiss.
+                    Color.black.opacity(0.001).onTapGesture { withAnimation(LX.M.mini) { pickerOpen = false } }
+                    ModelPickerPanel(open: $pickerOpen)
+                        .padding(.top, LX.S.header + 2).padding(.leading, 12)
+                        .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topLeading)))
+                }
+            }
+        }
     }
 
     // MARK: Header
     private var header: some View {
         ScreenHeader {
-            ModelPicker()
+            ModelPicker(open: $pickerOpen)
             Text("/").font(LX.F.body).foregroundStyle(Color(hex: 0x5E6172))
             ChatTitle()
             if session?.isPinned != true { Tag(text: "TEMP", color: LX.C.accentText) }
@@ -99,125 +111,188 @@ struct ChatTitle: View {
 
 // MARK: - Model picker
 
-/// Header model picker: a quiet label that opens a popover listing installed models with their details.
+/// Header model picker label (chip icon, name, variant · quant · context). Opens `ModelPickerPanel`.
 struct ModelPicker: View {
-    @EnvironmentObject var state: AppState
+    @Binding var open: Bool
     @Environment(InferenceStatusModel.self) private var inference
-    @State private var open = false
+    @State private var hover = false
     private var library: ModelLibrary { AppServices.shared.models }
 
     var body: some View {
-        Button { open.toggle() } label: {
-            HStack(spacing: 8) {
-                if inference.loadedModel != nil {
-                    Circle().fill(LX.C.ok).frame(width: 6, height: 6)
-                } else if isLoading {
-                    ProgressView().controlSize(.mini).frame(width: 10, height: 10)
+        Button { withAnimation(LX.M.mini) { open.toggle() } } label: {
+            HStack(spacing: 10) {
+                ZStack {
+                    Image(systemName: "cpu").font(.system(size: 15, weight: .regular)).foregroundStyle(LX.C.accentText)
+                    if isLoading { ProgressView().controlSize(.mini).offset(x: 9, y: 8) }
                 }
-                Text(title).font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary)
-                if let detail { Text(detail).font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary) }
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+                .frame(width: 20)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
+                    Text(subtitle).font(LX.F.ui(11)).foregroundStyle(LX.C.tertiary).lineLimit(1)
+                }
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+                    .rotationEffect(.degrees(open ? 180 : 0))
+                    .padding(.leading, 6)
             }
-            .padding(.horizontal, 10).frame(height: 30)
+            .padding(.leading, 10).padding(.trailing, 12).frame(height: 40)
+            .background(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous).fill(Color.white.opacity(open ? 0.08 : (hover ? 0.06 : 0.035))))
+            .overlay(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous).strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
+            .contentShape(Rectangle())
         }
-        .buttonStyle(QuietButtonStyle())
+        .buttonStyle(PressScaleStyle())
+        .onHover { h in withAnimation(LX.M.hover) { hover = h } }
         .help("Choose model")
-        .popover(isPresented: $open, arrowEdge: .bottom) { list }
-        .background {
-            Button("") { open.toggle() }.keyboardShortcut("m").opacity(0)
-        }
+        .background { Button("") { withAnimation(LX.M.mini) { open.toggle() } }.keyboardShortcut("m").opacity(0) }
     }
 
     private var isLoading: Bool { if case .loading = inference.snapshot.model { true } else { false } }
 
-    private var list: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            SectionLabel(text: "On this Mac").padding(.horizontal, 10).padding(.top, 4).padding(.bottom, 4)
-            if library.installed.isEmpty {
-                Text("No models installed yet.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary).padding(10)
-            }
-            ScrollView {
-                VStack(spacing: 2) {
-                    ForEach(library.installed) { m in
-                        ModelPickerRow(model: m, loaded: inference.loadedModel?.id == m.id.description,
-                                       loading: { if case .loading(let id, _) = inference.snapshot.model { id == m.id.description } else { false } }()) {
-                            UserDefaults.standard.set(m.id.description, forKey: ChatPreferences.defaultChatModelKey)
-                            if inference.loadedModel?.id != m.id.description { library.load(m) }
-                            open = false
-                        }
-                    }
-                }
-            }
-            .frame(maxHeight: 360)
-            Rectangle().fill(LX.C.divider).frame(height: 1).padding(.vertical, 4)
-            HStack(spacing: 4) {
-                Button { state.modelsTab = .discover; state.screen = .models; open = false } label: {
-                    Label("Get more models", systemImage: "arrow.down.circle").font(LX.F.ui(12)).padding(.horizontal, 8).frame(height: 26)
-                }
-                .buttonStyle(QuietButtonStyle())
-                Spacer()
-                if inference.loadedModel != nil {
-                    Button { library.unload(); open = false } label: {
-                        Text("Unload").font(LX.F.ui(12)).padding(.horizontal, 8).frame(height: 26)
-                    }
-                    .buttonStyle(QuietButtonStyle())
-                }
-            }
+    private var current: InstalledModel? {
+        switch inference.snapshot.model {
+        case .ready(let info): return library.model(info.id)
+        case .loading(let id, _): return library.model(id)
+        default: return AppServices.defaultChatModel(in: library)
         }
-        .padding(8)
-        .frame(width: 340)
     }
 
     private var title: String {
-        switch inference.snapshot.model {
-        case .ready(let info): return ModelRepoID(info.id).map(ModelDisplay.name) ?? info.id
-        case .loading(let id, _): return ModelRepoID(id).map(ModelDisplay.name) ?? id
-        default:
-            if let m = AppServices.defaultChatModel(in: library) { return ModelDisplay.name(m.id) }
-            return "No model"
-        }
+        if let m = current { return ModelDisplay.split(m.id).name }
+        return library.installed.isEmpty ? "No model" : "Choose a model"
     }
 
-    private var detail: String? {
-        switch inference.snapshot.model {
-        case .ready(let info):
-            return [info.quantization?.replacingOccurrences(of: "-", with: ""), info.contextLength.map { ModelDisplay.context($0) }]
-                .compactMap { $0 }.joined(separator: " · ")
-        case .loading: return "loading…"
-        case .failed: return "failed"
-        case .none: return library.installed.isEmpty ? nil : "not loaded"
-        }
+    private var subtitle: String {
+        if isLoading { return "Loading…" }
+        if case .failed = inference.snapshot.model { return "Failed to load" }
+        guard let m = current else { return library.installed.isEmpty ? "Download one in Models" : "" }
+        let s = ModelDisplay.subtitle(m, withSize: false)
+        return inference.loadedModel == nil ? (s.isEmpty ? "Not loaded" : "\(s) · not loaded") : s
     }
 }
 
-private struct ModelPickerRow: View {
-    let model: InstalledModel
-    let loaded: Bool
-    let loading: Bool
-    let action: () -> Void
-    @State private var hover = false
+/// Floating model list (same corner radius and glass as the window): Loaded / Available / Manage Models.
+struct ModelPickerPanel: View {
+    @Binding var open: Bool
+    @EnvironmentObject var state: AppState
+    @Environment(InferenceStatusModel.self) private var inference
+    private var library: ModelLibrary { AppServices.shared.models }
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
+        let loadedID = inference.loadedModel?.id
+        let loadingID: String? = { if case .loading(let id, _) = inference.snapshot.model { id } else { nil } }()
+        let loaded = library.installed.filter { $0.id.description == loadedID || $0.id.description == loadingID }
+        let available = library.installed.filter { $0.id.description != loadedID && $0.id.description != loadingID }
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(ModelDisplay.name(model.id)).font(LX.F.ui(13, loaded ? .semibold : .medium)).foregroundStyle(LX.C.primary)
-                    Text([ModelDisplay.parameters(model.id), model.manifest.quantizationBits.map { "\($0)-bit" },
-                          model.manifest.contextLength.map { "\(ModelDisplay.context($0)) ctx" }, ModelDisplay.bytes(model.diskBytes)]
-                        .compactMap { $0 }.joined(separator: " · "))
-                        .font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
+                    if !loaded.isEmpty {
+                        header("Loaded")
+                        ForEach(loaded) { m in row(m, active: m.id.description == loadedID, loading: m.id.description == loadingID) }
+                    }
+                    if !available.isEmpty {
+                        header("Available").padding(.top, loaded.isEmpty ? 0 : 8)
+                        ForEach(available) { m in row(m, active: false, loading: false) }
+                    }
+                    if library.installed.isEmpty {
+                        Text("No models installed yet.").font(LX.F.body).foregroundStyle(LX.C.tertiary).padding(12)
+                    }
+                }
+                .padding(8)
+            }
+            .frame(maxHeight: 420)
+            .fixedSize(horizontal: false, vertical: true)
+            Rectangle().fill(LX.C.divider).frame(height: 1)
+            PickerRowButton {
+                state.modelsTab = .installed
+                state.screen = .models
+                close()
+            } content: {
+                HStack(spacing: 12) {
+                    Image(systemName: "square.stack.3d.up").font(.system(size: 14)).foregroundStyle(LX.C.accentText).frame(width: 22)
+                    Text("Manage Models").font(LX.F.ui(13, .medium)).foregroundStyle(LX.C.accentText)
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+                }
+                .padding(.horizontal, 12).frame(height: 40)
+            }
+            .padding(6)
+        }
+        .frame(width: 380)
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: LX.R.window, style: .continuous).fill(.ultraThinMaterial)
+                RoundedRectangle(cornerRadius: LX.R.window, style: .continuous).fill(LX.C.overlay.opacity(0.88))
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: LX.R.window, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: LX.R.window, style: .continuous).strokeBorder(LX.C.edge, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: LX.R.window, style: .continuous)
+            .strokeBorder(LinearGradient(colors: [LX.C.highlight, .clear], startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.08)), lineWidth: 1))
+        .shadow(color: .black.opacity(0.45), radius: 28, y: 18)
+        .background { Button("") { close() }.keyboardShortcut(.escape, modifiers: []).opacity(0) }
+    }
+
+    private func close() { withAnimation(LX.M.mini) { open = false } }
+
+    private func header(_ title: String) -> some View {
+        Text(title.uppercased()).font(LX.F.label).kerning(0.8).foregroundStyle(LX.C.tertiary)
+            .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 4)
+    }
+
+    private func row(_ m: InstalledModel, active: Bool, loading: Bool) -> some View {
+        let parts = ModelDisplay.split(m.id)
+        return PickerRowButton(selected: active) {
+            UserDefaults.standard.set(m.id.description, forKey: ChatPreferences.defaultChatModelKey)
+            if !active && !loading { library.load(m) }
+            close()
+        } content: {
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(LX.C.secondary)
+                    .opacity(active ? 1 : 0).frame(width: 12)
+                    .padding(.trailing, -4)
+                Image(systemName: "cpu").font(.system(size: 15)).foregroundStyle(active ? LX.C.accentText : LX.C.secondary).frame(width: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(parts.name).font(LX.F.ui(13.5, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
+                    Text(ModelDisplay.subtitle(m, withSize: true)).font(LX.F.ui(11.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 if loading {
                     ProgressView().controlSize(.small)
-                } else if loaded {
-                    Text("LOADED").font(LX.F.mono(9.5)).kerning(0.5).foregroundStyle(LX.C.ok)
+                } else if active {
+                    Text("Active").font(LX.F.ui(11.5, .semibold)).foregroundStyle(LX.C.onGlass)
+                        .padding(.horizontal, 9).frame(height: 22)
+                        .accentGlass(radius: LX.R.sm, strength: 0.8)
+                } else {
+                    Menu {
+                        Button("Load") { library.load(m); close() }
+                        Button("Use for New Chats") { UserDefaults.standard.set(m.id.description, forKey: ChatPreferences.defaultChatModelKey) }
+                        Divider()
+                        Button("Show in Models") { state.modelsTab = .installed; state.screen = .models; close() }
+                    } label: {
+                        Image(systemName: "ellipsis").font(.system(size: 13, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+                            .frame(width: 28, height: 28).contentShape(Rectangle())
+                    }
+                    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                 }
             }
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: LX.R.md, style: .continuous)
-                .fill(loaded ? LX.C.accent.opacity(0.10) : Color.white.opacity(hover ? 0.06 : 0)))
-            .contentShape(Rectangle())
+            .padding(.horizontal, 12).frame(height: 54)
+        }
+    }
+}
+
+/// Full-width hoverable row used in the model panel.
+private struct PickerRowButton<Content: View>: View {
+    var selected = false
+    let action: () -> Void
+    @ViewBuilder let content: () -> Content
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous)
+                    .fill(selected ? LX.C.accent.opacity(hover ? 0.16 : 0.12) : Color.white.opacity(hover ? 0.06 : 0)))
+                .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleStyle())
         .onHover { h in withAnimation(LX.M.hover) { hover = h } }

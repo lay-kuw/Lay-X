@@ -22,7 +22,8 @@ struct WorkScreen: View {
             ScreenHeader {
                 Text("Work").font(LX.F.title)
             } trailing: {
-                Text("read-only until approved").font(LX.F.mono(11)).foregroundStyle(LX.C.secondary)
+                Image(systemName: "lock.shield").font(.system(size: 13)).foregroundStyle(LX.C.tertiary)
+                    .help("Read-only until approved — nothing in a project changes until you press Apply")
             }
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -83,14 +84,20 @@ struct WorkProjectView: View {
                         .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
                 }
             } trailing: {
-                HStack(spacing: 8) {
-                    if !changes.isEmpty {
-                        Text("\(changes.count) proposed").foregroundStyle(LX.C.warn)
-                        Text("·").foregroundStyle(LX.C.tertiary)
+                HStack(spacing: 10) {
+                    if busy {
+                        Image(systemName: "ellipsis").font(.system(size: 12, weight: .bold)).foregroundStyle(LX.C.liveCyan)
+                            .symbolEffect(.variableColor.iterative, options: .repeating)
+                            .help(session.phase == .reading ? "Reading files…" : "Writing a proposal…")
                     }
-                    Text("read-only until approved").foregroundStyle(LX.C.secondary)
+                    if !changes.isEmpty {
+                        Text("\(changes.count) proposed").font(LX.F.mono(11)).foregroundStyle(LX.C.warn)
+                    }
+                    Image(systemName: "lock.shield")
+                        .font(.system(size: 13)).foregroundStyle(changes.isEmpty ? LX.C.tertiary : LX.C.warn)
+                        .help("Read-only until approved — nothing in this folder changes until you press Apply")
+                        .accessibilityLabel("Read-only until approved")
                 }
-                .font(LX.F.mono(11))
             }
 
             HStack(spacing: 0) {

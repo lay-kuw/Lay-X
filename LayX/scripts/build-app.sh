@@ -31,9 +31,12 @@ ICON_SRC=Sources/LayXIcon/LX.png
 if [ -f "$ICON_SRC" ]; then
     ICONSET=$(mktemp -d)/AppIcon.iconset
     mkdir -p "$ICONSET"
+    MASTER="$(dirname "$ICONSET")/master.png"
+    # Normalise to the macOS icon grid (transparent corners, 824 px body, shadow).
+    swift scripts/make-icon.swift "$ICON_SRC" "$MASTER"
     for size in 16 32 128 256 512; do
-        sips -z $size $size "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-        sips -z $((size * 2)) $((size * 2)) "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+        sips -z $size $size "$MASTER" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+        sips -z $((size * 2)) $((size * 2)) "$MASTER" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
     done
     iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
     rm -rf "$(dirname "$ICONSET")"

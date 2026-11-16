@@ -170,7 +170,10 @@ struct MiniChatView: View {
                     }
                     .onSubmit { model.submit() }
                 if model.isGenerating {
-                    Text("generating…").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan)
+                    SendButton(mode: .stop) { model.stop() }
+                } else if !model.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    SendButton(mode: .send) { model.submit() }
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
             }
             .padding(.horizontal, 16)
@@ -227,6 +230,7 @@ struct MiniChatView: View {
         .padding(.top, 40)
         .animation(LX.M.mini, value: hasContent)
         .animation(LX.M.mini, value: model.isGenerating)
+        .animation(LX.M.hover, value: model.input.isEmpty)
         .onChange(of: model.focusToken) { focused = true }
         .onAppear { focused = true }
         .onKeyPress(.escape) {
@@ -265,24 +269,24 @@ struct MiniChatView: View {
             }
             .font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
             Spacer()
-            footerAction("New") { model.newConversation() }
-            footerAction(model.session?.isPinned == true ? "Unpin" : "Pin") { model.togglePin() }
-            footerAction("Open in Chat", emphasized: true) { MiniChatController.shared.openInMainWindow() }
+            IconButton(symbol: "plus", help: "New conversation") { model.newConversation() }
+                .disabled(model.isGenerating)
+            IconButton(symbol: model.session?.isPinned == true ? "star.fill" : "star",
+                       help: model.session?.isPinned == true ? "Unpin" : "Pin — save this chat on this Mac",
+                       active: model.session?.isPinned == true) { model.togglePin() }
+            Button { MiniChatController.shared.openInMainWindow() } label: {
+                HStack(spacing: 5) {
+                    Text("Open in Chat")
+                    Image(systemName: "arrow.up.forward").font(.system(size: 10, weight: .semibold))
+                }
+                .font(LX.F.ui(12)).padding(.horizontal, 9).frame(height: 28)
+            }
+            .buttonStyle(QuietButtonStyle())
         }
         .padding(.leading, 14).padding(.trailing, 8)
         .frame(height: 40)
         .background(Color.black.opacity(0.18))
         .overlay(alignment: .top) { Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1) }
-    }
-
-    private func footerAction(_ title: String, emphasized: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(LX.F.ui(12)).foregroundStyle(LX.C.body)
-                .padding(.horizontal, 8).frame(height: 26)
-                .background(RoundedRectangle(cornerRadius: LX.R.sm).fill(Color.white.opacity(emphasized ? 0.06 : 0)))
-        }
-        .buttonStyle(.plain)
     }
 
     private func insertNewline() {
