@@ -6,7 +6,10 @@ import LayXCore
 @MainActor
 @Observable
 final class ModelLibrary {
+    /// Installed language models (chat, Work, API).
     private(set) var installed: [InstalledModel] = []
+    /// Installed image models (Image screen).
+    private(set) var imageModels: [InstalledModel] = []
     private(set) var incomplete: [(id: ModelRepoID, bytes: Int64)] = []
     private(set) var downloads: [ModelRepoID: DownloadState] = [:]
     private(set) var searchResults: [HubModelSummary] = []
@@ -86,12 +89,13 @@ final class ModelLibrary {
     func refresh() {
         let store = self.store
         Task.detached(priority: .userInitiated) {
-            let installed = store.installedModels()
+            let all = store.installedModels()
             let incomplete = store.incompleteDownloads()
             let used = store.totalUsage()
             let free = store.availableCapacity()
             await MainActor.run {
-                self.installed = installed
+                self.installed = all.filter { !$0.isImageModel }
+                self.imageModels = all.filter(\.isImageModel)
                 self.incomplete = incomplete
                 self.storageUsed = used
                 self.storageFree = free
@@ -100,6 +104,7 @@ final class ModelLibrary {
     }
 
     func model(_ id: String) -> InstalledModel? { installed.first { $0.id.description == id } }
+    func imageModel(_ spec: ImageModelSpec) -> InstalledModel? { imageModels.first { $0.id == spec.id } }
 
     // MARK: Discovery
 
@@ -176,8 +181,10 @@ final class ModelLibrary {
     func download(_ id: ModelRepoID) {
         Task {
             do {
-                try await downloader.download(id)
-                notice = "\(ModelDisplay.name(id)) is ready."
+                // Known image models download exactly their pipeline files (also when resuming).
+                let profile = ImageModelSpec.spec(id.description)?.downloadProfile ?? .languageModel
+                try await downloader.download(id, profile: profile)
+                notice = "\(ImageModelSpec.spec(id.description)?.name ?? ModelDisplay.name(id)) is ready."
             } catch is CancellationError {
                 refresh()
             } catch {

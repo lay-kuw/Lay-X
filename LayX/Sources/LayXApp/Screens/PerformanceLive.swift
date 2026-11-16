@@ -269,7 +269,7 @@ struct PerformanceLiveView: View {
     }
 
     static func sourceName(_ c: InferenceClient) -> String {
-        ["chat": "Chat", "miniChat": "Mini Chat", "work": "Work", "api": "API", "benchmark": "Benchmark"][c.rawValue] ?? c.rawValue
+        ["chat": "Chat", "miniChat": "Mini Chat", "work": "Work", "api": "API", "benchmark": "Benchmark", "image": "Image"][c.rawValue] ?? c.rawValue
     }
 
     static func sourceColor(_ name: String) -> Color {

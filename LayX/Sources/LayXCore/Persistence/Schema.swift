@@ -47,6 +47,23 @@ public enum LayXSchema {
                 created_at  REAL NOT NULL
             );
             """),
+        // Image generation history (metadata; the PNG files live in the images folder).
+        Migration(version: 4, sql: """
+            CREATE TABLE image_generation (
+                id          TEXT PRIMARY KEY NOT NULL,
+                created_at  REAL NOT NULL,
+                prompt      TEXT NOT NULL,
+                negative    TEXT NOT NULL DEFAULT '',
+                model_id    TEXT NOT NULL,
+                seed        INTEGER NOT NULL,
+                steps       INTEGER NOT NULL,
+                width       INTEGER NOT NULL,
+                height      INTEGER NOT NULL,
+                file        TEXT NOT NULL,
+                duration_ms REAL NOT NULL
+            );
+            CREATE INDEX image_generation_created ON image_generation(created_at DESC);
+            """),
     ]
 
     public static let fileName = "LayX.sqlite"

@@ -18,7 +18,7 @@ nonisolated enum CommandLineTools {
         case "--mlx-selftest":
             print("mlx-selftest: \(MLXSelfTest.run())")
             exit(0)
-        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check", "--preempt-check", "--watch-check":
+        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check", "--preempt-check", "--watch-check", "--image-check":
             Task.detached {
                 do {
                     try await run(args)
@@ -35,7 +35,7 @@ nonisolated enum CommandLineTools {
     }
 
     /// Commands handled headlessly; anything else starts the GUI.
-    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check", "--preempt-check", "--watch-check"]
+    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check", "--preempt-check", "--watch-check", "--image-check"]
 
     private static func run(_ args: [String]) async throws {
         let store = ModelStore(root: try ModelStore.defaultRoot())
@@ -205,6 +205,77 @@ nonisolated enum CommandLineTools {
                 throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "")
             }
             try await CacheCheck.run(model: model)
+        case "--image-check":
+            // LayX --image-check [text-model-id]  — downloads SDXL Turbo if needed, generates, checks arbitration.
+            // LAYX_IMAGE_RESERVE_GB=n pretends n GB less memory is free (exercises unloading the text model).
+            let spec = ImageModelSpec.sdxlTurbo
+            if store.installedModel(spec.id) == nil {
+                let downloader = ModelDownloader(store: store, architectures: MLXArchitectureSupport())
+                let watcher = Task {
+                    var last = -1
+                    for await states in await downloader.updates() {
+                        if case .active(let p)? = states[spec.id] {
+                            let pct = Int(p.fraction * 100) / 5 * 5
+                            if pct != last { last = pct; print("download \(p.phase.rawValue) \(pct)% \(p.receivedBytes / 1_000_000) MB") }
+                        }
+                    }
+                }
+                let t0 = Date()
+                let installed = try await downloader.download(spec.id, profile: spec.downloadProfile)
+                watcher.cancel()
+                print(String(format: "installed in %.0f s, %.2f GB, kind %@", Date().timeIntervalSince(t0),
+                             Double(installed.diskBytes) / 1e9, installed.manifest.kind?.rawValue ?? "nil"))
+            }
+            let coordinator = InferenceCoordinator(engine: MLXEngine())
+            if args.count >= 3, let id = ModelRepoID(args[2]), let text = store.installedModel(id) {
+                try await coordinator.load(text.reference)
+                print("text model loaded: \(id)")
+            }
+            let reserve = Int64((Double(ProcessInfo.processInfo.environment["LAYX_IMAGE_RESERVE_GB"] ?? "0") ?? 0) * 1_073_741_824)
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lx-image-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let db = try SQLiteDatabase(location: .file(dir.appendingPathComponent("t.sqlite")), migrations: LayXSchema.migrations)
+            let studio = await MainActor.run {
+                ImageStudio(engine: MLXImageEngine(), coordinator: coordinator,
+                            store: ImageHistoryStore(database: db, folder: dir.appendingPathComponent("images")),
+                            modelDirectory: { store.installedModel($0.id)?.directory },
+                            availableMemory: { SystemMemory.availableBytes() - reserve })
+            }
+            print(String(format: "free memory before: %.1f GB (reserve %.0f GB)", Double(SystemMemory.availableBytes()) / 1e9, Double(reserve) / 1e9))
+            for (label, steps, count) in [("cold (load + 1 image)", 2, 1), ("warm, 2 images", 2, 2), ("warm, 4 steps", 4, 1)] {
+                let t = Date()
+                await MainActor.run {
+                    studio.generate(ImageRequest(prompt: "a cozy reading nook with a sleeping cat, warm light, watercolor",
+                                                 steps: steps, seed: 42, count: count), spec: spec)
+                }
+                try await Task.sleep(for: .milliseconds(50))
+                while await MainActor.run(body: { studio.isBusy }) { try await Task.sleep(for: .milliseconds(20)) }
+                let (n, err, notice) = await MainActor.run { (studio.history.count, studio.error, studio.notice) }
+                print(String(format: "%@: %.2f s, history %d, error %@, notice %@", label, Date().timeIntervalSince(t), n, err ?? "-", notice ?? "-"))
+            }
+            if let m = await coordinator.memory() {
+                print(String(format: "MLX active %.1f GB, peak %.1f GB", Double(m.activeBytes) / 1e9, Double(m.peakBytes) / 1e9))
+            }
+            print("text model still loaded: \(await coordinator.snapshot.model.loadedModel != nil)")
+            // Reverse direction: loading the text model again frees the idle image model when memory is short.
+            if args.count >= 3, let id = ModelRepoID(args[2]), let text = store.installedModel(id) {
+                await coordinator.setBeforeLoad { reference in
+                    let need = Int64(Double(ModelStore.allocatedSize(of: reference.directory)) * 1.2)
+                    guard SystemMemory.availableBytes() - reserve < need else { return }
+                    _ = await studio.releaseForTextModel()
+                }
+                try await coordinator.load(text.reference)
+                let imageLoaded = await MainActor.run { studio.loadedModelID != nil }
+                print("text model reloaded: \(await coordinator.snapshot.model.loadedModel != nil), image model still loaded: \(imageLoaded)")
+            }
+            let first = await MainActor.run { studio.history.last.flatMap { studio.url(for: $0) } }
+            if let first { print("image: \(first.path)") }
+            // Determinism: same seed → same image.
+            let records = await MainActor.run { studio.history }
+            if records.count >= 2, let a = await MainActor.run(body: { studio.url(for: records[records.count - 1]) }),
+               let b = await MainActor.run(body: { studio.url(for: records[records.count - 2]) }) {
+                print("seed 42 reproducible: \((try? Data(contentsOf: a)) == (try? Data(contentsOf: b)))")
+            }
         case "--watch-check":
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lx-watch-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

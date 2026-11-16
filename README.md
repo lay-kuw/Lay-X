@@ -37,6 +37,7 @@ lights that shimmer while the model thinks. 🔮
 | 💬 **Chat** | Streaming replies, Markdown & code, collapsible reasoning (“Thinking” on/off), rename, ★ pin to keep |
 | 🪄 **Mini Chat** | Press **⌥ Space** anywhere → a floating glass box appears. Ask, read, done. |
 | 🛠️ **Work** | Open a project folder, describe a change, get a **diff**. Nothing is written until you press **Apply**. |
+| 🎨 **Image** | Type a prompt, get a picture — SDXL Turbo on MLX, about a second per image, fully offline after one download. |
 | 🌐 **Web search** | Off / Auto / On. DuckDuckGo, Brave or your own SearXNG — only the *query* ever leaves your Mac. |
 | 📦 **Models** | Browse & download MLX models from Hugging Face (trending, likes, downloads…), resume, verify, manage. |
 | 📈 **Performance** | Live speed cards in plain words + real benchmarks (TTFT, prefill, decode, context sweeps). |
@@ -60,6 +61,8 @@ Lay X is built around a few rules it never breaks:
   cookies, no uploads), local/LAN addresses are refused, and Work never uses the web at all.
 - 🏠 **The API stays home.** It listens on `127.0.0.1` by default; LAN access needs an explicit opt‑in *and*
   an API key.
+- 🎨 **Images stay home.** No Python, no cloud, no server — the image model runs in‑process on MLX, and your
+  pictures are plain PNGs in `~/.config/lay-x/images`.
 - 🧠 **Caches are memory‑only too.** KV caches are dropped when a chat is deleted, the model changes, or
   memory gets tight.
 
@@ -106,6 +109,18 @@ code streams in live, the files it's reading or writing glow in the tree, and if
 **Continue generating** picks up right where it stopped. Then: review the diff → **Apply** (green) or
 **Reject**. 💚
 
+## 🎨 Image, the tiny painter
+
+Open **Image**, download **SDXL Turbo** once (~7 GB), then just describe what you want and press **Generate**
+(⌘ Return). Pick 1–4 steps, 1–4 images, and a seed if you want the exact same picture again. Every image lands
+in the history grid — copy it, save it anywhere, reuse its prompt & seed, or toss it. 🖼️
+
+Chat and images share one Mac politely: they never use the GPU at the same time, and if memory is tight Lay X
+unloads whichever model is idle (and tells you) so the other one fits. ✨
+
+> SDXL Turbo is made by Stability AI and comes with its own
+> [license](https://huggingface.co/stabilityai/sdxl-turbo/blob/main/LICENSE.md) — please give it a read.
+
 ## 🔌 Use it from other apps
 
 Turn on **API Server**, then:
@@ -127,6 +142,7 @@ Anything that speaks the OpenAI chat API can point its base URL at `http://127.0
 | ⌥ Space | Mini Chat (anywhere) |
 | ⌘ N | New chat |
 | ⌘ O | Open a project in Work |
+| ⌘ Return | Generate an image (in Image) |
 | ⌘ P | Pin / unpin chat |
 | ⌘ I | Inspector |
 | ⌘ , | Settings |
@@ -137,7 +153,8 @@ Anything that speaks the OpenAI chat API can point its base URL at `http://127.0
 | What | Where |
 |---|---|
 | Models | `~/.config/lay-x/models` (changeable in Settings) |
-| Pinned chats & benchmarks | `~/.config/lay-x/database/LayX.sqlite` (changeable in Settings) |
+| Pinned chats, benchmarks & image history | `~/.config/lay-x/database/LayX.sqlite` (changeable in Settings) |
+| Generated images | `~/.config/lay-x/images` |
 | Temporary chats | nowhere — memory only 🫧 |
 
 ## 🧩 Project layout
@@ -147,7 +164,8 @@ Lay-X/
 ├── LayX/            the app (Swift package)
 │   ├── Sources/
 │   │   ├── LayXCore     chats, prompts, inference coordinator, models, Work, performance, SQLite
-│   │   ├── LayXMLX      the MLX engine (mlx-swift-lm)
+│   │   ├── LayXMLX      the MLX engines (text: mlx-swift-lm · images: Stable Diffusion)
+│   │   ├── StableDiffusionMLX  SDXL Turbo on MLX (vendored, MIT)
 │   │   ├── LayXServer   OpenAI-compatible server (Hummingbird)
 │   │   └── LayXApp      SwiftUI app, design system, screens, Mini Chat
 │   ├── Tests/
@@ -172,6 +190,7 @@ scripts/test-core.sh   # core + server test suites
 Built with love on top of these wonderful projects:
 [MLX](https://github.com/ml-explore/mlx) & [MLX Swift](https://github.com/ml-explore/mlx-swift) ·
 [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm) ·
+[mlx-swift-examples](https://github.com/ml-explore/mlx-swift-examples) (Stable Diffusion port, MIT) ·
 [Hummingbird](https://github.com/hummingbird-project/hummingbird) ·
 [swift-transformers](https://github.com/huggingface/swift-transformers) ·
 and every model author on [Hugging Face](https://huggingface.co/mlx-community). 🤗

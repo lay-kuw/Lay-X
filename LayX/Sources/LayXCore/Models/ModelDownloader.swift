@@ -73,9 +73,9 @@ public actor ModelDownloader {
 
     /// Starts (or resumes) a download. Returns when the model is installed.
     @discardableResult
-    public func download(_ id: ModelRepoID, revision: String = "main") async throws -> InstalledModel {
+    public func download(_ id: ModelRepoID, revision: String = "main", profile: DownloadProfile = .languageModel) async throws -> InstalledModel {
         if let existing = tasks[id] { return try await existing.value }
-        let task = Task { try await self.perform(id, revision: revision) }
+        let task = Task { try await self.perform(id, revision: revision, profile: profile) }
         tasks[id] = task
         defer { tasks[id] = nil }
         do {
@@ -115,20 +115,33 @@ public actor ModelDownloader {
 
     // MARK: Work
 
-    private func perform(_ id: ModelRepoID, revision: String) async throws -> InstalledModel {
+    private func perform(_ id: ModelRepoID, revision: String, profile: DownloadProfile) async throws -> InstalledModel {
         set(id, .active(DownloadProgress(phase: .preparing, receivedBytes: 0, totalBytes: 0, bytesPerSecond: 0)))
 
         // 1. File list + compatibility gate (only config.json is fetched before the check).
         let all = try await hub.files(of: id, revision: revision)
-        let files = HubAPI.requiredFiles(all)
-        guard files.contains(where: { $0.path.hasSuffix(".safetensors") }) else { throw ModelStoreError.noWeights }
-        guard files.contains(where: { $0.path == "config.json" }) else { throw ModelStoreError.incompatible("no config.json") }
-        let configData = try await hub.smallFile("config.json", of: id, revision: revision)
-        let configJSON = (try? JSONSerialization.jsonObject(with: configData) as? [String: Any]) ?? [:]
-        let config = ModelStore.parseConfig(configJSON)
-        guard let modelType = config.modelType else { throw ModelStoreError.incompatible("config.json has no model_type") }
-        guard await architectures.supports(modelType: modelType) else {
-            throw ModelStoreError.incompatible("architecture “\(modelType)” is not supported by the MLX engine")
+        let files: [HubFile]
+        let modelType: String
+        var config: (modelType: String?, bits: Int?, context: Int?) = (nil, nil, nil)
+        switch profile {
+        case .languageModel:
+            files = HubAPI.requiredFiles(all)
+            guard files.contains(where: { $0.path.hasSuffix(".safetensors") }) else { throw ModelStoreError.noWeights }
+            guard files.contains(where: { $0.path == "config.json" }) else { throw ModelStoreError.incompatible("no config.json") }
+            let configData = try await hub.smallFile("config.json", of: id, revision: revision)
+            let configJSON = (try? JSONSerialization.jsonObject(with: configData) as? [String: Any]) ?? [:]
+            config = ModelStore.parseConfig(configJSON)
+            guard let type = config.modelType else { throw ModelStoreError.incompatible("config.json has no model_type") }
+            guard await architectures.supports(modelType: type) else {
+                throw ModelStoreError.incompatible("architecture “\(type)” is not supported by the MLX engine")
+            }
+            modelType = type
+        case .image(let type, let wanted):
+            // Exactly the files the image pipeline loads (repositories also hold other formats and precisions).
+            files = all.filter { wanted.contains($0.path) }
+            let missing = Set(wanted).subtracting(files.map(\.path))
+            guard missing.isEmpty else { throw ModelStoreError.incompatible("missing \(missing.sorted().joined(separator: ", "))") }
+            modelType = type
         }
         try Task.checkCancellation()
 
@@ -185,13 +198,15 @@ public actor ModelDownloader {
         let fm = FileManager.default
         for (file, url) in targets {
             let final = try ModelStore.safeChild(of: dir, relativePath: file.path)
+            // Image models keep files in subfolders (unet/, vae/, …).
+            try fm.createDirectory(at: final.deletingLastPathComponent(), withIntermediateDirectories: true)
             if fm.fileExists(atPath: final.path) { try fm.removeItem(at: final) }
             try fm.moveItem(at: url, to: final)
         }
         try? fm.removeItem(at: partial)
         let manifest = InstalledModelManifest(
             id: id, revision: revision, files: files, downloadedAt: Date(), modelType: modelType,
-            quantizationBits: config.bits, contextLength: config.context)
+            quantizationBits: config.bits, contextLength: config.context, kind: profile.kind)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -266,4 +281,13 @@ final class ProgressMeter: Sendable {
             DownloadProgress(phase: phase, receivedBytes: s.received, totalBytes: total, bytesPerSecond: s.rate, currentFile: file)
         }
     }
+}
+/// What a download fetches and how it is checked.
+public enum DownloadProfile: Sendable, Hashable {
+    /// MLX language model: weights + configs + tokenizer, architecture checked against the engine.
+    case languageModel
+    /// Image model: exactly `files` (repository-relative paths), recorded with `modelType`.
+    case image(modelType: String, files: [String])
+
+    var kind: ModelKind { if case .image = self { .image } else { .language } }
 }

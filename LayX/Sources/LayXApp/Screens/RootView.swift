@@ -40,6 +40,7 @@ struct RootView: View {
         switch state.screen {
         case .chat: ChatScreen()
         case .work: WorkScreen()
+        case .image: ImageScreen()
         case .models: ModelsScreen()
         case .performance: PerformanceScreen()
         case .api: APIServerScreen()
@@ -62,7 +63,7 @@ struct Sidebar: View {
                 .padding(.top, 10)
 
             VStack(spacing: 1) {
-                ForEach([Screen.chat, .work, .models, .performance, .api]) { screen in
+                ForEach([Screen.chat, .work, .image, .models, .performance, .api]) { screen in
                     NavRow(screen: screen, selected: state.screen == screen) {
                         // Clicking Chat while already in Chat starts a new chat.
                         if screen == .chat && state.screen == .chat { state.newChat() } else { state.screen = screen }
@@ -112,6 +113,17 @@ struct Sidebar: View {
             ListRow(symbol: "plus", title: "Open folder…", meta: "")
                 .contentShape(Rectangle())
                 .onTapGesture { work.openFolder() }
+        case .image:
+            let images = AppServices.shared.images
+            sectionHeader("Recent")
+            ForEach(images.history.prefix(14)) { r in
+                ListRow(symbol: "photo", title: r.prompt, meta: "", selected: r.id == images.selected?.id)
+                    .contentShape(Rectangle())
+                    .onTapGesture { images.selectedID = r.id }
+            }
+            if images.history.isEmpty {
+                Text("No images yet").font(LX.F.caption).foregroundStyle(LX.C.tertiary).padding(.horizontal, 8)
+            }
         case .models:
             sectionHeader("Library")
             let library = AppServices.shared.models
@@ -203,6 +215,7 @@ struct NavRow: View {
                     HStack(spacing: 6) { LiveDot(); Text(verbatim: ":\(api.port)").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan) }
                 }
                 if screen == .work { WorkActivityIndicator() }
+                if screen == .image, AppServices.shared.images.isBusy { BusyIndicator(help: "Generating an image") }
                 if screen == .chat, !AppServices.shared.chats.generating.isEmpty { BusyIndicator(help: "A reply is being generated") }
             }
             .foregroundStyle(selected ? Color.white : Color(hex: 0xC9CBD6))

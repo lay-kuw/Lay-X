@@ -54,10 +54,10 @@ public struct PromptMessage: Sendable, Hashable, Codable {
 /// Where a generation request came from. Used for status display and scheduling diagnostics — never logged
 /// together with content.
 public enum InferenceClient: String, Sendable, Hashable, Codable {
-    case chat, miniChat, work, benchmark, api
+    case chat, miniChat, work, benchmark, api, image
 
-    /// Someone is waiting on the reply (Chat, Mini Chat, API clients).
-    public var isInteractive: Bool { self == .chat || self == .miniChat || self == .api }
+    /// Someone is waiting on the result (Chat, Mini Chat, API clients, image generation).
+    public var isInteractive: Bool { self == .chat || self == .miniChat || self == .api || self == .image }
     /// Long background generation that may be paused at a token boundary so an interactive reply can run.
     public var isPreemptible: Bool { self == .work }
 }

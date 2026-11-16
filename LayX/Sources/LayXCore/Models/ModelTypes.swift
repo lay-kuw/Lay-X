@@ -135,8 +135,14 @@ public struct InstalledModelManifest: Sendable, Hashable, Codable {
     public var modelType: String?
     public var quantizationBits: Int?
     public var contextLength: Int?
+    /// nil = language model (manifests written before image models existed).
+    public var kind: ModelKind? = nil
 
     public var totalBytes: Int64 { files.reduce(0) { $0 + $1.size } }
+}
+
+public enum ModelKind: String, Sendable, Hashable, Codable {
+    case language, image
 }
 
 /// A model present in the storage directory.
@@ -148,6 +154,7 @@ public struct InstalledModel: Sendable, Hashable, Identifiable {
     public var diskBytes: Int64
 
     public var reference: ModelReference { ModelReference(id: manifest.id.description, directory: directory) }
+    public var isImageModel: Bool { manifest.kind == .image }
 }
 
 public enum ModelStoreError: Error, Equatable, Sendable, LocalizedError {

@@ -45,7 +45,9 @@ import Testing
         let c = InferenceCoordinator(engine: engine)
         try await c.load(ref)
         try await withThrowingTaskGroup(of: String.self) { group in
-            for client in [InferenceClient.chat, .miniChat, .api, .work] {
+            // No Work here: an interactive request legitimately runs while Work is paused (covered by the
+            // preemption tests), which this engine would count as two concurrent generations.
+            for client in [InferenceClient.chat, .miniChat, .api, .benchmark] {
                 group.addTask { try await collect(c.generate(request(client))).0 }
             }
             for try await text in group { #expect(text == "Hello!") }

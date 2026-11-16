@@ -20,6 +20,7 @@ final class AppServices {
     let chats: ChatSessionStore
     let work = WorkProjects()
     let performance: PerformanceModel
+    let images: ImageStudio
     private(set) var api: APIServerModel!
     private var memoryPressure: DispatchSourceMemoryPressure?
     private var defaultsObserver: NSObjectProtocol?
@@ -83,6 +84,7 @@ final class AppServices {
             pinnedChats = PinnedChatRepository(database: db)
             await chats.replaceRepository(pinnedChats)
             await performance.replaceStore(BenchmarkStore(database: db))
+            await images.replaceStore(Self.imageStore(db))
             await api.useDatabase(db)
         } catch {
             // Fall back to whatever is at the old location so pinning keeps working.
@@ -135,6 +137,32 @@ final class AppServices {
             },
             webResearcher: { try WebResearcher(config: WebPreferences.config) })
         performance = PerformanceModel(store: database.map(BenchmarkStore.init(database:)), coordinator: coordinator)
+        #if canImport(LayXMLX)
+        let imageEngine: any ImageEngine = MLXImageEngine()
+        #else
+        let imageEngine: any ImageEngine = UnavailableImageEngine()
+        #endif
+        images = ImageStudio(
+            engine: imageEngine, coordinator: coordinator, store: database.flatMap(Self.imageStore),
+            modelDirectory: { spec in
+                // Current storage folder (it can be changed in Settings).
+                AppServices.shared.models.store.installedModel(spec.id).flatMap { $0.isImageModel ? $0.directory : nil }
+            },
+            availableMemory: { SystemMemory.availableBytes() },
+            allowUnloadingTextModel: { ImagePreferences.makeRoom },
+            keepLoaded: { ImagePreferences.keepLoaded })
+        let images = self.images
+        Task { await images.loadHistory() }
+        // Before a text model loads: free an idle image model if the text model wouldn't fit next to it.
+        Task {
+            await coordinator.setBeforeLoad { reference in
+                let need = Int64(Double(ModelStore.allocatedSize(of: reference.directory)) * 1.2)
+                guard SystemMemory.availableBytes() < need else { return }
+                if await images.releaseForTextModel() {
+                    Log.inference.info("Unloaded the image model to make room for a text model")
+                }
+            }
+        }
         let chats = self.chats
         Task { await chats.loadPinned() }
         startMemoryPressureMonitor()
@@ -181,6 +209,10 @@ final class AppServices {
         }
     }
 
+    static func imageStore(_ db: SQLiteDatabase) -> ImageHistoryStore? {
+        (try? ImageHistoryStore.defaultFolder()).map { ImageHistoryStore(database: db, folder: $0) }
+    }
+
     /// The model used when a chat needs one and none is loaded: the configured default if installed, else the
     /// most recently used, else the first installed model.
     static func defaultChatModel(in library: ModelLibrary) -> InstalledModel? {
@@ -198,8 +230,10 @@ final class AppServices {
         source.setEventHandler { [weak source] in
             let critical = source?.data.contains(.critical) ?? false
             Task {
-                // Reusable KV caches go first; the model itself only under critical pressure, and only when idle.
+                // Reusable KV caches go first, then an idle image model; the text model itself only under
+                // critical pressure, and only when idle.
                 await coordinator.discardCaches(key: nil)
+                await AppServices.shared.images.releaseForTextModel()
                 if critical, await coordinator.handleMemoryPressure() {
                     Log.inference.notice("Unloaded model after critical memory pressure")
                 }
@@ -271,6 +305,16 @@ final class InferenceStatusModel {
 #if !canImport(LayXMLX)
 struct NoArchitectures: ModelArchitectureSupport {
     func supports(modelType: String) async -> Bool { false }
+}
+
+struct UnavailableImageEngine: ImageEngine {
+    func load(_ spec: ImageModelSpec, directory: URL) async throws {
+        throw ImageEngineError.loadFailed("this build of Lay X was compiled without the MLX engine")
+    }
+    func unload() async {}
+    func generate(_ request: ImageRequest) -> AsyncThrowingStream<ImageEvent, Error> {
+        AsyncThrowingStream { $0.finish(throwing: ImageEngineError.notLoaded) }
+    }
 }
 
 /// Engine used when the app is built with `LAYX_NO_MLX=1`.

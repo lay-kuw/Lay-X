@@ -72,6 +72,12 @@ public enum SystemMemory {
         let page = Int64(getpagesize())
         return (Int64(stats.wire_count) + Int64(stats.active_count) + Int64(stats.compressor_page_count)) * page
     }
+
+    /// Physical memory not in use (total − wired − active − compressed): what a new model can take without
+    /// pushing the system into swap.
+    public static func availableBytes() -> Int64 {
+        max(Int64(HardwareInfo.current.memoryBytes) - (usedBytes() ?? 0), 0)
+    }
 }
 
 /// Memory reported by the inference engine.

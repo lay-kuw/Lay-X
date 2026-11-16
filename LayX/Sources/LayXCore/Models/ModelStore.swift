@@ -183,7 +183,7 @@ public struct ModelStore: Sendable {
 
     // MARK: Helpers
 
-    static func allocatedSize(of url: URL) -> Int64 {
+    public static func allocatedSize(of url: URL) -> Int64 {
         let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .isRegularFileKey]
         guard let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys)) else { return 0 }
         var total: Int64 = 0

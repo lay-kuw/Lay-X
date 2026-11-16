@@ -99,8 +99,13 @@ public actor InferenceCoordinator {
     // MARK: Lifecycle
 
     /// Loads `reference`, replacing any loaded model. Running generations are cancelled first.
+    /// Called before a text model loads (e.g. to free an idle image model when memory is short).
+    private var beforeLoad: (@Sendable (ModelReference) async -> Void)?
+    public func setBeforeLoad(_ hook: (@Sendable (ModelReference) async -> Void)?) { beforeLoad = hook }
+
     @discardableResult
     public func load(_ reference: ModelReference) async throws -> LoadedModelInfo {
+        await beforeLoad?(reference)
         cancelAllGenerations()
         let ticket = UUID()
         try await acquire(ticket, as: .lifecycle, bypassLimit: true)
@@ -170,6 +175,22 @@ public actor InferenceCoordinator {
     /// Drops reusable KV caches for a conversation (nil = all), e.g. when a chat is deleted.
     public nonisolated func discardCaches(key: String?) async { await engine.discardCaches(key: key) }
     public nonisolated func cacheBytes() async -> Int64 { await engine.cacheBytes() }
+
+    // MARK: Other GPU work
+
+    /// Runs non-text GPU work (image generation) under the generation gate: it never overlaps a text
+    /// generation, waits its turn like any request, and — being interactive — pauses a running Work
+    /// generation at a token boundary instead of waiting for it to finish.
+    public func exclusive<T: Sendable>(client: InferenceClient, _ body: @Sendable () async throws -> T) async throws -> T {
+        let id = UUID()
+        let slot = try await acquireGeneration(id, client: client, gate: nil)
+        defer { releaseGeneration(slot) }
+        publish()
+        return try await body()
+    }
+
+    /// True when a text model is loaded and nothing is generating or queued (safe to unload for memory).
+    public var isIdleWithModel: Bool { !gateBusy && overlay == nil && model.loadedModel != nil }
 
     // MARK: Generation
 

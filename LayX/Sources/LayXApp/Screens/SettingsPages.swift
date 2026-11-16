@@ -368,3 +368,47 @@ struct WebSearchSettings: View {
         }
     }
 }
+
+// MARK: - Image Generation
+
+struct ImageSettings: View {
+    let screen: SettingsScreen
+    @AppStorage(ImagePreferences.keepLoadedKey) private var keepLoaded = 5
+    @AppStorage(ImagePreferences.makeRoomKey) private var makeRoom = true
+    private var studio: ImageStudio { AppServices.shared.images }
+    private var library: ModelLibrary { AppServices.shared.models }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            screen.group("Memory") {
+                screen.row("Keep the image model loaded", "Unloading frees about \(Int(Double(ImagePreferences.spec.runtimeBytes) / 1_073_741_824)) GB; loading again takes a few seconds") {
+                    Picker("", selection: $keepLoaded) {
+                        Text("Unload after each run").tag(0)
+                        Text("1 minute").tag(1)
+                        Text("5 minutes").tag(5)
+                        Text("15 minutes").tag(15)
+                        Text("1 hour").tag(60)
+                        Text("Until quit").tag(-1)
+                    }
+                    .labelsHidden().fixedSize()
+                }
+                screen.row("Make room automatically", "When memory is short, unload an idle chat model before loading the image model (and the other way round). Text and image generation never run at the same time") {
+                    Toggle("", isOn: $makeRoom).toggleStyle(LXToggleStyle()).labelsHidden().fixedSize()
+                }
+            }
+            screen.group("Model") {
+                let spec = ImagePreferences.spec
+                screen.row(spec.name, library.imageModel(spec).map { "Downloaded · \(ByteCountFormatter.string(fromByteCount: $0.diskBytes, countStyle: .file)) · works offline" } ?? "Not downloaded — open Image to download it") {
+                    Link("License", destination: spec.licenseURL).font(LX.F.ui(12)).foregroundStyle(LX.C.accentText)
+                }
+            }
+            screen.group("Images") {
+                screen.row("Saved images", "\(studio.history.count) image\(studio.history.count == 1 ? "" : "s") · PNG files on this Mac") {
+                    if let folder = studio.imagesFolder {
+                        LXButton(title: "Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
+                    }
+                }
+            }
+        }
+    }
+}
