@@ -276,6 +276,22 @@ struct TempProject {
         #expect(p.read("a.txt") == "1\n")
     }
 
+    @Test func workSoulIsAppendedAfterRules() {
+        let s = WorkPrompt.system(persona: "Prefer small diffs. Comment in Japanese.")
+        #expect(s.hasPrefix(WorkPrompt.system))
+        #expect(s.contains("rules above always take precedence"))
+        #expect(s.hasSuffix("Comment in Japanese."))
+        #expect(WorkPrompt.system(persona: "  ") == WorkPrompt.system)
+    }
+
+    @Test func folderMentionIncludesItsFiles() throws {
+        let p = try TempProject(files: ["Sources/Chat/View.swift": "v", "Sources/Chat/Model.swift": "m", "Other/X.swift": "x"])
+        defer { p.remove() }
+        let ws = try Workspace(root: p.root)
+        let sel = ContextBuilder.select(request: "refactor @Sources/Chat/", entries: WorkspaceScanner.scan(ws), focus: nil, in: ws, tokenBudget: 10_000)
+        #expect(Set(sel.files.map(\.path)) == ["Sources/Chat/View.swift", "Sources/Chat/Model.swift"])
+    }
+
     @Test func contextSelectionPrefersMentionsAndRespectsBudget() throws {
         let p = try TempProject(files: ["Sources/ChatView.swift": String(repeating: "x", count: 900),
                                         "Sources/Other.swift": "y", "README.md": "readme"]); defer { p.remove() }
@@ -287,5 +303,40 @@ struct TempProject {
         #expect(sel.files.map(\.path).contains("Sources/ChatView.swift"))
         let tight = ContextBuilder.select(request: "chat view", entries: entries, focus: nil, in: ws, tokenBudget: 100)
         #expect(!tight.files.map(\.path).contains("Sources/ChatView.swift"))
+    }
+}
+
+@Suite struct MentionCompleterTests {
+    let entries = [
+        WorkspaceEntry(path: "Sources", isDirectory: true, size: 0),
+        WorkspaceEntry(path: "Sources/Chat", isDirectory: true, size: 0),
+        WorkspaceEntry(path: "Sources/Chat/ChatView.swift", isDirectory: false, size: 1),
+        WorkspaceEntry(path: "Sources/Chat/Composer.swift", isDirectory: false, size: 1),
+        WorkspaceEntry(path: "README.md", isDirectory: false, size: 1),
+        WorkspaceEntry(path: "Tests/ChatTests.swift", isDirectory: false, size: 1),
+    ]
+
+    @Test func detectsTrailingMention() {
+        #expect(MentionCompleter.activeQuery(in: "fix @Cha") == "Cha")
+        #expect(MentionCompleter.activeQuery(in: "@") == "")
+        #expect(MentionCompleter.activeQuery(in: "fix @ChatView.swift ") == nil)
+        #expect(MentionCompleter.activeQuery(in: "mail me@example") == nil)
+        #expect(MentionCompleter.activeQuery(in: "no mention") == nil)
+    }
+
+    @Test func ranksNamePrefixFirstAndFoldersEndWithSlash() {
+        let s = MentionCompleter.suggestions(for: "chat", in: entries)
+        #expect(s.first?.path == "Sources/Chat")
+        #expect(s.first?.insertion == "Sources/Chat/")
+        #expect(s.map(\.path).contains("Sources/Chat/ChatView.swift"))
+        #expect(MentionCompleter.suggestions(for: "", in: entries).map(\.path) == ["Sources", "README.md"])
+        #expect(MentionCompleter.suggestions(for: "sources/chat/co", in: entries).map(\.path) == ["Sources/Chat/Composer.swift"])
+    }
+
+    @Test func applyReplacesToken() {
+        let file = MentionCompleter.Suggestion(path: "Sources/Chat/ChatView.swift", isDirectory: false)
+        #expect(MentionCompleter.apply(file, to: "refactor @Chat") == "refactor @Sources/Chat/ChatView.swift ")
+        let folder = MentionCompleter.Suggestion(path: "Sources/Chat", isDirectory: true)
+        #expect(MentionCompleter.apply(folder, to: "@So") == "@Sources/Chat/")
     }
 }

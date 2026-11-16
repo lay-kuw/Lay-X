@@ -44,15 +44,10 @@ struct ChatScreen: View {
                 memory: inference.engineMemory.map { String(format: "%.1f", Double($0.activeBytes) / 1_073_741_824) } ?? "—",
                 live: chats.isGenerating(state.currentChatID))
             let pinned = session?.isPinned == true
-            Button { state.togglePin() } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: pinned ? "star.fill" : "star").font(.system(size: 11))
-                    Text(pinned ? "Pinned" : "Pin")
-                }
-            }
-            .buttonStyle(LXButtonStyle(kind: pinned ? .primary : .secondary, height: 30))
-            .disabled(isEmpty)
-            .help(pinned ? "Unpin — the saved copy is removed; the chat stays open until you quit" : "Pin — save this chat on this Mac")
+            IconButton(symbol: pinned ? "star.fill" : "star",
+                       help: pinned ? "Unpin — the saved copy is removed; the chat stays open until you quit" : "Pin — save this chat on this Mac",
+                       active: pinned) { state.togglePin() }
+                .disabled(isEmpty)
             IconButton(symbol: "plus", help: "New chat") { state.newChat() }
             IconButton(symbol: "sidebar.right", help: "Inspector") { withAnimation(LX.M.panel) { state.inspector.toggle() } }
         }
@@ -104,47 +99,73 @@ struct ChatTitle: View {
 
 // MARK: - Model picker
 
+/// Header model picker: a quiet label that opens a popover listing installed models with their details.
 struct ModelPicker: View {
     @EnvironmentObject var state: AppState
     @Environment(InferenceStatusModel.self) private var inference
+    @State private var open = false
     private var library: ModelLibrary { AppServices.shared.models }
 
     var body: some View {
-        Menu {
-            ForEach(library.installed) { m in
-                Button {
-                    UserDefaults.standard.set(m.id.description, forKey: ChatPreferences.defaultChatModelKey)
-                    if inference.loadedModel?.id != m.id.description { library.load(m) }
-                } label: {
-                    if inference.loadedModel?.id == m.id.description {
-                        Label(ModelDisplay.name(m.id), systemImage: "checkmark")
-                    } else {
-                        Text(ModelDisplay.name(m.id))
+        Button { open.toggle() } label: {
+            HStack(spacing: 8) {
+                if inference.loadedModel != nil {
+                    Circle().fill(LX.C.ok).frame(width: 6, height: 6)
+                } else if isLoading {
+                    ProgressView().controlSize(.mini).frame(width: 10, height: 10)
+                }
+                Text(title).font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary)
+                if let detail { Text(detail).font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary) }
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+            }
+            .padding(.horizontal, 10).frame(height: 30)
+        }
+        .buttonStyle(QuietButtonStyle())
+        .help("Choose model")
+        .popover(isPresented: $open, arrowEdge: .bottom) { list }
+        .background {
+            Button("") { open.toggle() }.keyboardShortcut("m").opacity(0)
+        }
+    }
+
+    private var isLoading: Bool { if case .loading = inference.snapshot.model { true } else { false } }
+
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            SectionLabel(text: "On this Mac").padding(.horizontal, 10).padding(.top, 4).padding(.bottom, 4)
+            if library.installed.isEmpty {
+                Text("No models installed yet.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary).padding(10)
+            }
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(library.installed) { m in
+                        ModelPickerRow(model: m, loaded: inference.loadedModel?.id == m.id.description,
+                                       loading: { if case .loading(let id, _) = inference.snapshot.model { id == m.id.description } else { false } }()) {
+                            UserDefaults.standard.set(m.id.description, forKey: ChatPreferences.defaultChatModelKey)
+                            if inference.loadedModel?.id != m.id.description { library.load(m) }
+                            open = false
+                        }
                     }
                 }
             }
-            if !library.installed.isEmpty { Divider() }
-            if inference.loadedModel != nil { Button("Unload Model") { library.unload() } }
-            Button("Manage Models…") { state.screen = .models }
-        } label: {
-            HStack(spacing: 8) {
-                Text(title).font(LX.F.ui(13, .semibold))
-                if let detail { Text(detail).font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary) }
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+            .frame(maxHeight: 360)
+            Rectangle().fill(LX.C.divider).frame(height: 1).padding(.vertical, 4)
+            HStack(spacing: 4) {
+                Button { state.modelsTab = .discover; state.screen = .models; open = false } label: {
+                    Label("Get more models", systemImage: "arrow.down.circle").font(LX.F.ui(12)).padding(.horizontal, 8).frame(height: 26)
+                }
+                .buttonStyle(QuietButtonStyle())
+                Spacer()
+                if inference.loadedModel != nil {
+                    Button { library.unload(); open = false } label: {
+                        Text("Unload").font(LX.F.ui(12)).padding(.horizontal, 8).frame(height: 26)
+                    }
+                    .buttonStyle(QuietButtonStyle())
+                }
             }
-            .padding(.horizontal, 10).frame(height: 30)
-            .contentShape(Rectangle())
-            .background(RoundedRectangle(cornerRadius: LX.R.md).fill(Color.white.opacity(0.05)))
-            .overlay(RoundedRectangle(cornerRadius: LX.R.md).strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Switch model")
-        .background {
-            Button("") { state.screen = .models }.keyboardShortcut("m").opacity(0)
-        }
+        .padding(8)
+        .frame(width: 340)
     }
 
     private var title: String {
@@ -166,6 +187,40 @@ struct ModelPicker: View {
         case .failed: return "failed"
         case .none: return library.installed.isEmpty ? nil : "not loaded"
         }
+    }
+}
+
+private struct ModelPickerRow: View {
+    let model: InstalledModel
+    let loaded: Bool
+    let loading: Bool
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ModelDisplay.name(model.id)).font(LX.F.ui(13, loaded ? .semibold : .medium)).foregroundStyle(LX.C.primary)
+                    Text([ModelDisplay.parameters(model.id), model.manifest.quantizationBits.map { "\($0)-bit" },
+                          model.manifest.contextLength.map { "\(ModelDisplay.context($0)) ctx" }, ModelDisplay.bytes(model.diskBytes)]
+                        .compactMap { $0 }.joined(separator: " · "))
+                        .font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
+                }
+                Spacer(minLength: 8)
+                if loading {
+                    ProgressView().controlSize(.small)
+                } else if loaded {
+                    Text("LOADED").font(LX.F.mono(9.5)).kerning(0.5).foregroundStyle(LX.C.ok)
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: LX.R.md, style: .continuous)
+                .fill(loaded ? LX.C.accent.opacity(0.10) : Color.white.opacity(hover ? 0.06 : 0)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleStyle())
+        .onHover { h in withAnimation(LX.M.hover) { hover = h } }
     }
 }
 
@@ -256,7 +311,7 @@ struct ChatThread: View {
 struct MessageView: View, Equatable {
     let message: ChatMessage
     var streaming = false
-    /// nil = automatic (expanded while thinking, collapsed when done); set when the user toggles it.
+    /// Reasoning is collapsed unless the user opens it (nil = default collapsed).
     @State private var reasoningExpanded: Bool?
 
     static func == (a: MessageView, b: MessageView) -> Bool { a.message == b.message && a.streaming == b.streaming }
@@ -274,10 +329,11 @@ struct MessageView: View, Equatable {
             if message.role == .assistant {
                 let parts = ThinkingParser.split(message.content)
                 if let thinking = parts.thinking {
-                    let expanded = reasoningExpanded ?? parts.isThinking
+                    let expanded = reasoningExpanded ?? false
                     Button { withAnimation(LX.M.hover) { reasoningExpanded = !expanded } } label: {
                         HStack(spacing: 5) {
                             Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .semibold))
+                            if parts.isThinking { LiveDot(color: LX.C.liveCyan) }
                             Text(parts.isThinking ? "Thinking…" : "Reasoning")
                             if !parts.isThinking { Text("· \(thinking.count.formatted()) chars").foregroundStyle(LX.C.tertiary) }
                         }
@@ -454,22 +510,19 @@ struct Composer: View {
                         Image(systemName: thinking ? "brain" : "bolt").font(.system(size: 10, weight: .medium))
                         Text(thinking ? "Thinking" : "No thinking")
                     }
-                    .font(LX.F.caption).foregroundStyle(thinking ? LX.C.accentText : LX.C.secondary)
+                    .font(LX.F.caption)
                     .padding(.horizontal, 8).frame(height: 24)
-                    .contentShape(Rectangle())
-                    .overlay(RoundedRectangle(cornerRadius: LX.R.sm).strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(QuietButtonStyle(radius: LX.R.sm, active: thinking))
                 .help("Click to switch reasoning on or off for models that support it (e.g. Qwen3). Other models ignore it.")
                 Spacer()
                 contextMeter
                 if generating {
-                    LXButton(title: "Stop") { state.stop() }
+                    SendButton(mode: .stop) { state.stop() }
                         .keyboardShortcut(.escape, modifiers: [])
                 } else {
-                    LXButton(title: "Send", kind: .primary) { submit() }
+                    SendButton(mode: .send, enabled: !state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { submit() }
                         .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             .padding(.leading, 8).padding(.trailing, 7).frame(height: 38)

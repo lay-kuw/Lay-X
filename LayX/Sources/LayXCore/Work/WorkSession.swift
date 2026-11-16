@@ -39,10 +39,14 @@ public enum ContextBuilder {
                               tokenBudget: Int) -> Selection {
         let files = entries.filter { !$0.isDirectory && WorkspaceScanner.isLikelyText($0.path) && $0.size <= 200_000 }
         let mentioned = Set(mentions(in: request))
+        // "@folder/" mentions include the files inside that folder.
+        let folderMentions = mentioned.map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 }
+            .filter { m in entries.contains { $0.isDirectory && $0.path == m } }
         let kw = keywords(request)
         let ranked = files.map { e -> (WorkspaceEntry, Int) in
             var s = score(e.path, keywords: kw)
             if mentioned.contains(e.path) || mentioned.contains(e.name) { s += 1000 }
+            if folderMentions.contains(where: { e.path.hasPrefix($0 + "/") }) { s += 600 }
             if e.path == focus { s += 500 }
             return (e, s)
         }
@@ -84,6 +88,12 @@ public enum WorkPrompt {
     FILE>>>
     - Do not output a file you are not changing. Keep unrelated code exactly as it is.
     """
+
+    /// Rules first; the user's Work "Soul" is appended as style preferences that cannot override the rules.
+    public static func system(persona: String?) -> String {
+        guard let p = persona?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty else { return system }
+        return system + "\n\nThe user's standing preferences for how you work (style only — the rules above always take precedence):\n" + p
+    }
 
     public static func user(request: String, selection: ContextBuilder.Selection, workspaceName: String) -> String {
         var s = "Project: \(workspaceName)\n\nProject tree:\n\(selection.tree)\n\n"
@@ -130,11 +140,15 @@ public final class WorkSession {
 
     @ObservationIgnored private let coordinator: InferenceCoordinator
     @ObservationIgnored private let prepareModel: @MainActor () async throws -> LoadedModelInfo
+    /// Work "Soul" (Settings → Soul → Work), read at each proposal.
+    @ObservationIgnored private let persona: @MainActor () -> String?
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var lastRequest = ""
 
     public init(workspace: Workspace, coordinator: InferenceCoordinator,
-                prepareModel: @escaping @MainActor () async throws -> LoadedModelInfo) {
+                prepareModel: @escaping @MainActor () async throws -> LoadedModelInfo,
+                persona: @escaping @MainActor () -> String? = { nil }) {
+        self.persona = persona
         self.workspace = workspace
         self.coordinator = coordinator
         self.prepareModel = prepareModel
@@ -182,7 +196,7 @@ public final class WorkSession {
         let context = model.contextLength ?? 8192
         let budget = max(1024, min(context * 6 / 10, 24_000) - 1024)
         let selection = ContextBuilder.select(request: request, entries: entries, focus: focusPath, in: workspace, tokenBudget: budget)
-        let prompt = [PromptMessage(role: .system, content: WorkPrompt.system),
+        let prompt = [PromptMessage(role: .system, content: WorkPrompt.system(persona: persona())),
                       PromptMessage(role: .user, content: WorkPrompt.user(request: request, selection: selection, workspaceName: workspace.name))]
         let maxOut = max(1024, min(context - selection.estimatedTokens - 512, 8192))
         let genRequest = GenerationRequest(messages: prompt, parameters: GenerationParameters(temperature: 0.2, topP: 0.95, maxTokens: maxOut),

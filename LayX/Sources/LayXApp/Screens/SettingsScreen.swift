@@ -226,45 +226,18 @@ struct SettingsScreen: View {
 
     // MARK: Soul
     @AppStorage(ChatPreferences.soulKey) private var soul = ""
+    @AppStorage(ChatPreferences.workSoulKey) private var workSoul = ""
 
     private var soulPage: some View {
         VStack(alignment: .leading, spacing: 22) {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionLabel(text: "Soul").padding(.leading, 2)
-                VStack(alignment: .leading, spacing: 0) {
-                    ZStack(alignment: .topLeading) {
-                        if soul.isEmpty {
-                            Text("Who should the assistant be? e.g. “You are a calm senior engineer. Answer in Japanese unless asked otherwise. Be concise and show code when it helps.”")
-                                .font(LX.F.body).foregroundStyle(LX.C.tertiary)
-                                .padding(.horizontal, 5).padding(.vertical, 8)
-                                .allowsHitTesting(false)
-                        }
-                        TextEditor(text: $soul)
-                            .font(LX.F.body).foregroundStyle(LX.C.body)
-                            .scrollContentBackground(.hidden)
-                            .lineSpacing(4)
-                            .onChange(of: soul) { _, new in
-                                if new.count > ChatPreferences.soulLimit { soul = String(new.prefix(ChatPreferences.soulLimit)) }
-                            }
-                    }
-                    .frame(minHeight: 220)
-                    .padding(.horizontal, 11).padding(.vertical, 8)
-                    Rectangle().fill(Color.white.opacity(0.045)).frame(height: 1)
-                    HStack {
-                        Text("\(soul.count.formatted()) / \(ChatPreferences.soulLimit.formatted())")
-                            .font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary)
-                        Spacer()
-                        LXButton(title: "Clear") { soul = "" }.disabled(soul.isEmpty)
-                    }
-                    .padding(.horizontal, 16).frame(height: 44)
-                }
-                .well()
-                .clipShape(RoundedRectangle(cornerRadius: LX.R.lg))
-            }
+            SoulEditor(title: "Chat & Mini Chat", text: $soul,
+                       placeholder: "Who should the assistant be? e.g. “You are a calm senior engineer. Answer in Japanese unless asked otherwise. Be concise and show code when it helps.”")
+            SoulEditor(title: "Work", text: $workSoul,
+                       placeholder: "How should Work approach your projects? e.g. “Prefer small, focused diffs. Follow the existing code style. Write comments in English and explanations in Japanese.”")
             HStack(spacing: 10) {
                 Image(systemName: "sparkle").foregroundStyle(LX.C.accentText)
-                Text("Sent as the system prompt with every Chat and Mini Chat message, starting with the next reply. Stored only on this Mac.")
-                    .font(LX.F.ui(12)).foregroundStyle(Color(hex: 0xC9CBD6))
+                Text("Chat's Soul is sent as the system prompt for Chat and Mini Chat. Work's Soul is added after Work's safety rules (it can shape style, not override the rules). Both apply from the next reply and are stored only on this Mac.")
+                    .font(LX.F.ui(12)).foregroundStyle(Color(hex: 0xC9CBD6)).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -400,5 +373,46 @@ struct SettingsScreen: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
+    }
+}
+
+/// Multi-line persona editor used on the Soul page.
+struct SoulEditor: View {
+    let title: String
+    @Binding var text: String
+    let placeholder: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionLabel(text: title).padding(.leading, 2)
+            VStack(alignment: .leading, spacing: 0) {
+                ZStack(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text(placeholder).font(LX.F.body).foregroundStyle(LX.C.tertiary)
+                            .padding(.horizontal, 5).padding(.vertical, 8)
+                            .allowsHitTesting(false)
+                    }
+                    TextEditor(text: $text)
+                        .font(LX.F.body).foregroundStyle(LX.C.body)
+                        .scrollContentBackground(.hidden)
+                        .lineSpacing(4)
+                        .onChange(of: text) { _, new in
+                            if new.count > ChatPreferences.soulLimit { text = String(new.prefix(ChatPreferences.soulLimit)) }
+                        }
+                }
+                .frame(minHeight: 160)
+                .padding(.horizontal, 11).padding(.vertical, 8)
+                Rectangle().fill(Color.white.opacity(0.045)).frame(height: 1)
+                HStack {
+                    Text("\(text.count.formatted()) / \(ChatPreferences.soulLimit.formatted())")
+                        .font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary)
+                    Spacer()
+                    LXButton(title: "Clear") { text = "" }.disabled(text.isEmpty)
+                }
+                .padding(.horizontal, 16).frame(height: 44)
+            }
+            .well()
+            .clipShape(RoundedRectangle(cornerRadius: LX.R.lg))
+        }
     }
 }

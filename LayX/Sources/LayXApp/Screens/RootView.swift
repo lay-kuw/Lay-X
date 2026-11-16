@@ -89,7 +89,7 @@ struct Sidebar: View {
         case .chat:
             let chats = AppServices.shared.chats
             sectionHeader("Session", note: "· not saved")
-            ForEach(chats.temporarySessions.filter { !$0.messages.isEmpty }) { chatRow($0, symbol: "clock") }
+            ForEach(chats.temporarySessions.filter { !$0.messages.isEmpty }) { chatRow($0, symbol: "clock", quickDelete: true) }
             sectionHeader("Pinned")
             ForEach(chats.pinnedSessions) { chatRow($0, symbol: "star") }
         case .work:
@@ -150,10 +150,11 @@ struct Sidebar: View {
         }
     }
 
-    private func chatRow(_ session: ChatSession, symbol: String) -> some View {
+    private func chatRow(_ session: ChatSession, symbol: String, quickDelete: Bool = false) -> some View {
         let chats = AppServices.shared.chats
-        return ListRow(symbol: chats.isGenerating(session.id) ? "ellipsis" : symbol, title: session.title, meta: "",
-                       selected: session.id == state.currentChatID)
+        return ChatListRow(symbol: chats.isGenerating(session.id) ? "ellipsis" : symbol, title: session.title,
+                           selected: session.id == state.currentChatID,
+                           onDelete: quickDelete ? { withAnimation(LX.M.hover) { state.deleteChat(session.id) } } : nil)
             .contentShape(Rectangle())
             .onTapGesture { state.currentChatID = session.id }
             .contextMenu {
@@ -236,6 +237,37 @@ struct ListRow: View {
         }
         .foregroundStyle(selected ? Color.white : Color(hex: 0xC9CBD6))
         .padding(.horizontal, 8)
+        .frame(height: LX.S.row)
+        .background(RoundedRectangle(cornerRadius: LX.R.md).fill(Color.white.opacity(selected ? 0.07 : (hover ? 0.05 : 0))))
+        .onHover { h in withAnimation(LX.M.hover) { hover = h } }
+    }
+}
+
+/// Sidebar chat row. Temporary chats show a trash button on hover for one-click deletion.
+struct ChatListRow: View {
+    let symbol: String
+    let title: String
+    var selected = false
+    var onDelete: (() -> Void)?
+    @State private var hover = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol).font(.system(size: 11)).frame(width: 13)
+                .foregroundStyle(selected ? LX.C.accent : LX.C.tertiary)
+            Text(title).font(LX.F.body).lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 4)
+            if hover, let onDelete {
+                Button(action: onDelete) {
+                    Image(systemName: "trash").font(.system(size: 11)).frame(width: 22, height: 22)
+                }
+                .buttonStyle(QuietButtonStyle(radius: LX.R.sm))
+                .help("Delete chat")
+                .transition(.opacity)
+            }
+        }
+        .foregroundStyle(selected ? Color.white : Color(hex: 0xC9CBD6))
+        .padding(.leading, 8).padding(.trailing, 4)
         .frame(height: LX.S.row)
         .background(RoundedRectangle(cornerRadius: LX.R.md).fill(Color.white.opacity(selected ? 0.07 : (hover ? 0.05 : 0))))
         .onHover { h in withAnimation(LX.M.hover) { hover = h } }

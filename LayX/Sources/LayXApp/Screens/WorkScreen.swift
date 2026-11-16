@@ -51,6 +51,19 @@ struct WorkProjectView: View {
     @State private var collapsed: Set<String> = []
     @State private var request = ""
     @State private var preview: TextFile?
+    @State private var mentionIndex = 0
+    @State private var mentionDismissedFor: String?
+
+    /// `@` completion candidates for the token being typed (empty when not typing a mention).
+    private var mentionSuggestions: [MentionCompleter.Suggestion] {
+        guard let q = MentionCompleter.activeQuery(in: request), mentionDismissedFor != request else { return [] }
+        return MentionCompleter.suggestions(for: q, in: session.entries)
+    }
+
+    private func acceptMention(_ s: MentionCompleter.Suggestion) {
+        request = MentionCompleter.apply(s, to: request)
+        mentionIndex = 0
+    }
 
     private var changes: [ProposedChange] { session.changeSet?.changes ?? [] }
     private var selectedCount: Int { changes.filter(\.selected).count }
@@ -324,17 +337,47 @@ struct WorkProjectView: View {
 
             Spacer(minLength: 0)
 
+            if !mentionSuggestions.isEmpty { mentionList }
             VStack(alignment: .leading, spacing: 6) {
-                TextField(changes.isEmpty ? "Describe a change…" : "Refine the proposal…", text: $request, axis: .vertical)
+                TextField(changes.isEmpty ? "Describe a change… (@ to add files)" : "Refine the proposal…", text: $request, axis: .vertical)
                     .textFieldStyle(.plain).font(LX.F.body).lineLimit(1...6)
                     .onKeyPress(.return, phases: .down) { press in
+                        let s = mentionSuggestions
+                        if !s.isEmpty, !press.modifiers.contains(.shift) {
+                            acceptMention(s[min(mentionIndex, s.count - 1)])
+                            return .handled
+                        }
                         guard press.modifiers.contains(.shift) else { return .ignored }
                         request += "\n"
                         return .handled
                     }
+                    .onKeyPress(.tab) {
+                        let s = mentionSuggestions
+                        guard !s.isEmpty else { return .ignored }
+                        acceptMention(s[min(mentionIndex, s.count - 1)])
+                        return .handled
+                    }
+                    .onKeyPress(.downArrow) {
+                        let n = mentionSuggestions.count
+                        guard n > 0 else { return .ignored }
+                        mentionIndex = (mentionIndex + 1) % n
+                        return .handled
+                    }
+                    .onKeyPress(.upArrow) {
+                        let n = mentionSuggestions.count
+                        guard n > 0 else { return .ignored }
+                        mentionIndex = (mentionIndex - 1 + n) % n
+                        return .handled
+                    }
+                    .onKeyPress(.escape) {
+                        guard !mentionSuggestions.isEmpty else { return .ignored }
+                        mentionDismissedFor = request
+                        return .handled
+                    }
+                    .onChange(of: request) { mentionIndex = 0 }
                     .onSubmit { submit() }
                 HStack {
-                    Text("@path includes a file").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary)
+                    Text("@ adds files or folders").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary)
                     Spacer()
                     if busy {
                         LXButton(title: "Stop") { session.cancel() }.keyboardShortcut(.escape, modifiers: [])
@@ -345,6 +388,34 @@ struct WorkProjectView: View {
             .well(radius: LX.R.lg, fill: Color(hex: 0x080910, alpha: 0.6))
             .padding(10)
         }
+    }
+
+    private var mentionList: some View {
+        let items = mentionSuggestions
+        return VStack(alignment: .leading, spacing: 1) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+                Button { acceptMention(item) } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: item.isDirectory ? "folder" : "doc")
+                            .font(.system(size: 11)).foregroundStyle(item.isDirectory ? LX.C.accent : LX.C.tertiary).frame(width: 14)
+                        Text(item.name).font(LX.F.bodySmall).foregroundStyle(LX.C.primary).lineLimit(1)
+                        Text(item.path).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1).truncationMode(.head)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 8).frame(height: 26)
+                    .background(RoundedRectangle(cornerRadius: LX.R.sm).fill(LX.C.accent.opacity(i == min(mentionIndex, items.count - 1) ? 0.14 : 0)))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { if $0 { mentionIndex = i } }
+            }
+        }
+        .padding(4)
+        .background(RoundedRectangle(cornerRadius: LX.R.lg).fill(LX.C.overlay))
+        .overlay(RoundedRectangle(cornerRadius: LX.R.lg).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+        .shadow(color: .black.opacity(0.35), radius: 14, y: 8)
+        .padding(.horizontal, 10)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
     private func changeRow(_ change: ProposedChange) -> some View {

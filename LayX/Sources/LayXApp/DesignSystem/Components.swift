@@ -289,30 +289,47 @@ struct LXButtonStyle: ButtonStyle {
     var height: CGFloat = LX.S.control
 
     func makeBody(configuration: Configuration) -> some View {
+        LXButtonBody(configuration: configuration, kind: kind, height: height)
+    }
+}
+
+/// Primary = accent glass; secondary / danger = soft borderless tint that deepens on hover and press.
+private struct LXButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    let kind: LXButtonKind
+    let height: CGFloat
+    @State private var hover = false
+    @Environment(\.isEnabled) private var enabled
+
+    var body: some View {
         let label = configuration.label
             .font(LX.F.ui(12, kind == .primary ? .semibold : .medium))
             .lineLimit(1)
             .padding(.horizontal, 11)
             .frame(height: height)
+        let shape = RoundedRectangle(cornerRadius: LX.R.md, style: .continuous)
+        let level = configuration.isPressed ? 2.0 : (hover && enabled ? 1.0 : 0.0)
         return Group {
             switch kind {
             case .primary:
-                label.foregroundStyle(LX.C.onGlass).accentGlass()
+                label.foregroundStyle(LX.C.onGlass).accentGlass(strength: 1 + 0.15 * level)
             case .secondary:
-                label.foregroundStyle(LX.C.body)
-                    .background(RoundedRectangle(cornerRadius: LX.R.md).fill(Color.white.opacity(0.05)))
-                    .overlay(RoundedRectangle(cornerRadius: LX.R.md).strokeBorder(LX.C.edge, lineWidth: 1))
+                label.foregroundStyle(hover && enabled ? LX.C.primary : LX.C.body)
+                    .background(shape.fill(Color.white.opacity(0.055 + 0.03 * level)))
             case .danger:
                 label.foregroundStyle(Color(hex: 0xFF9C9C))
-                    .background(RoundedRectangle(cornerRadius: LX.R.md).fill(Color(hex: 0xFF5A5A, alpha: 0.06)))
-                    .overlay(RoundedRectangle(cornerRadius: LX.R.md).strokeBorder(Color(hex: 0xFF7878, alpha: 0.25), lineWidth: 1))
+                    .background(shape.fill(Color(hex: 0xFF5A5A, alpha: 0.08 + 0.05 * level)))
             case .plain:
                 label.foregroundStyle(LX.C.body)
+                    .background(shape.fill(Color.white.opacity(0.05 * level)))
             }
         }
-        .opacity(configuration.isPressed ? 0.75 : 1)
-        .scaleEffect(configuration.isPressed ? 0.98 : 1)
+        .contentShape(shape)
+        .opacity(enabled ? 1 : 0.5)
+        .scaleEffect(configuration.isPressed ? 0.97 : 1)
         .animation(LX.M.hover, value: configuration.isPressed)
+        .animation(LX.M.hover, value: hover)
+        .onHover { hover = $0 }
     }
 }
 
@@ -336,23 +353,100 @@ struct LXButton: View {
     }
 }
 
+/// Borderless control style shared by icon buttons and chips: quiet at rest, a soft tint on hover, a deeper
+/// tint and a slight press-in when clicked. No outlines — the design's "quiet" controls.
+struct QuietButtonStyle: ButtonStyle {
+    var radius: CGFloat = LX.R.md
+    var active = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        QuietButtonBody(configuration: configuration, radius: radius, active: active)
+    }
+}
+
+/// View that owns the hover state (ButtonStyle itself can't hold @State).
+private struct QuietButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    let radius: CGFloat
+    let active: Bool
+    @State private var hover = false
+    @Environment(\.isEnabled) private var enabled
+
+    var body: some View {
+        configuration.label
+            .foregroundStyle(!enabled ? LX.C.tertiary : (active ? LX.C.accentText : (hover ? LX.C.primary : LX.C.secondary)))
+            .background(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(active ? LX.C.accent.opacity(configuration.isPressed ? 0.20 : (hover ? 0.16 : 0.11))
+                                 : Color.white.opacity(configuration.isPressed ? 0.11 : (hover && enabled ? 0.06 : 0)))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(LX.M.hover, value: configuration.isPressed)
+            .animation(LX.M.hover, value: hover)
+            .onHover { hover = $0 }
+    }
+}
+
 struct IconButton: View {
     let symbol: String
     let help: String
+    var active = false
     var action: () -> Void = {}
-    @State private var hover = false
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(hover ? LX.C.primary : LX.C.secondary)
                 .frame(width: 28, height: 28)
-                .background(RoundedRectangle(cornerRadius: LX.R.md).fill(Color.white.opacity(hover ? 0.07 : 0)))
         }
-        .buttonStyle(.plain)
-        .onHover { h in withAnimation(LX.M.hover) { hover = h } }
+        .buttonStyle(QuietButtonStyle(active: active))
         .help(help)
         .accessibilityLabel(help)
+    }
+}
+
+/// Composer send / stop: an icon on a small rounded square of accent glass (never a solid fill).
+struct SendButton: View {
+    enum Mode { case send, stop }
+    let mode: Mode
+    var enabled = true
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: mode == .send ? "arrow.up" : "stop.fill")
+                .font(.system(size: mode == .send ? 13 : 10, weight: .bold))
+                .foregroundStyle(enabled ? LX.C.onGlass : LX.C.tertiary)
+                .frame(width: 28, height: 28)
+                .modifier(SendBackground(enabled: enabled, hover: hover))
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(!enabled)
+        .onHover { h in withAnimation(LX.M.hover) { hover = h } }
+        .help(mode == .send ? "Send" : "Stop generating")
+        .accessibilityLabel(mode == .send ? "Send" : "Stop")
+    }
+}
+
+private struct SendBackground: ViewModifier {
+    let enabled: Bool
+    let hover: Bool
+    func body(content: Content) -> some View {
+        if enabled {
+            content.accentGlass(radius: 8, strength: hover ? 1.25 : 1)
+        } else {
+            content.background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.06)))
+        }
+    }
+}
+
+struct PressScaleStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(LX.M.hover, value: configuration.isPressed)
     }
 }
 
