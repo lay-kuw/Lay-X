@@ -115,10 +115,21 @@ struct Sidebar: View {
             let pending = Set(library.activeDownloads.map(\.id)).union(library.incomplete.map(\.id)).count
             libraryRow("arrow.down.to.line", "Downloads", pending == 0 ? "" : "\(pending)", .downloads)
         case .performance:
+            let perf = AppServices.shared.performance
             sectionHeader("Runs")
-            ListRow(symbol: nil, title: "Context sweep · 3 models", meta: "now", selected: true)
-            ListRow(symbol: nil, title: "Qwen3 14B · 4 vs 8-bit", meta: "1d")
-            ListRow(symbol: nil, title: "Cold start", meta: "3d")
+            ForEach(perf.results.prefix(30)) { r in
+                ListRow(symbol: nil, title: r.title, meta: ModelDisplay.age(r.date), selected: r.id == perf.selected?.id)
+                    .contentShape(Rectangle())
+                    .onTapGesture { perf.selectedID = r.id }
+                    .contextMenu {
+                        Button("Export CSV…") { perf.exportCSV(r) }
+                        Divider()
+                        Button("Delete Run", role: .destructive) { perf.delete(r.id) }
+                    }
+            }
+            if perf.results.isEmpty {
+                Text("No runs yet").font(LX.F.caption).foregroundStyle(LX.C.tertiary).padding(.horizontal, 8)
+            }
         case .api:
             sectionHeader("Endpoints")
             ForEach(Self.endpoints.indices, id: \.self) { i in

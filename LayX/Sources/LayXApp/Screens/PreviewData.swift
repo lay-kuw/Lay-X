@@ -41,39 +41,6 @@ enum Screen: String, CaseIterable, Identifiable {
 /// Each later stage deletes its section.
 enum Mock {}
 
-// MARK: - Performance
-
-struct SweepPoint: Identifiable {
-    let id = UUID()
-    var model: String
-    var contextK: Int
-    var tps: Double
-}
-
-extension Mock {
-    static let sweepModels = ["Qwen3 30B-A3B", "Qwen3 14B", "Gemma 3 27B"]
-    static let sweep: [SweepPoint] = {
-        let xs = [1, 2, 4, 8, 16, 32]
-        let values: [[Double]] = [
-            [74.1, 72.8, 70.2, 66.0, 58.4, 47.9],
-            [50.2, 49.1, 47.6, 44.3, 39.0, 31.2],
-            [26.1, 25.6, 24.6, 22.9, 20.1, 16.4],
-        ]
-        var out: [SweepPoint] = []
-        for (m, name) in sweepModels.enumerated() {
-            for (i, x) in xs.enumerated() { out.append(SweepPoint(model: name, contextK: x, tps: values[m][i])) }
-        }
-        return out
-    }()
-
-    struct Comparison: Identifiable { let id = UUID(); var model: String; var ttft: Int; var prefill: Int; var decode: Double; var memory: Double }
-    static let comparison: [Comparison] = [
-        Comparison(model: "Qwen3 30B-A3B", ttft: 138, prefill: 1910, decode: 71.3, memory: 19.4),
-        Comparison(model: "Qwen3 14B", ttft: 182, prefill: 1240, decode: 48.6, memory: 12.7),
-        Comparison(model: "Gemma 3 27B", ttft: 311, prefill: 640, decode: 24.9, memory: 18.8),
-    ]
-}
-
 // MARK: - API
 
 struct APIRequest: Identifiable, Hashable {

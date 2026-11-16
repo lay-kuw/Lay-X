@@ -16,7 +16,7 @@ nonisolated enum CommandLineTools {
         case "--mlx-selftest":
             print("mlx-selftest: \(MLXSelfTest.run())")
             exit(0)
-        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check":
+        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark":
             Task.detached {
                 do {
                     try await run(args)
@@ -33,7 +33,7 @@ nonisolated enum CommandLineTools {
     }
 
     /// Commands handled headlessly; anything else starts the GUI.
-    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check"]
+    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark"]
 
     private static func run(_ args: [String]) async throws {
         let store = ModelStore(root: try ModelStore.defaultRoot())
@@ -89,6 +89,27 @@ nonisolated enum CommandLineTools {
                 throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "")
             }
             try await WorkCheck.run(model: model)
+        case "--benchmark":
+            // LayX --benchmark <model> [quick|sweep] — real MLX; result saved to the app database (synthetic prompt only).
+            guard args.count >= 3, let id = ModelRepoID(args[2]), let model = store.installedModel(id) else {
+                throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "")
+            }
+            let config: BenchmarkConfig = args.count >= 4 && args[3] == "sweep" ? .contextSweep : .quick
+            let coordinator = InferenceCoordinator(engine: MLXEngine())
+            try await coordinator.load(model.reference)
+            let result = try await BenchmarkRunner.run(config, coordinator: coordinator, engineName: "MLX Swift 0.32.3 · mlx-swift-lm 3.32.3") { p in
+                print("  step \(p.step)/\(p.total) prompt \(p.promptTarget)\(p.warmup ? " (warm-up)" : "")")
+            }
+            print("\(result.title) — \(result.config.label) — \(result.hardware.summary)")
+            for p in result.points {
+                print(String(format: "  prompt %6d (measured %6d): TTFT p50 %7.0f ms p95 %7.0f ms | prefill %7.0f tok/s | decode %6.1f tok/s | gen %d",
+                             p.promptTarget, p.promptTokens, p.ttftMedianMs, p.ttftP95Ms, p.prefillMedian, p.decodeMedian, p.generatedTokens))
+            }
+            print(String(format: "  peak MLX memory %.2f GB, weights %.2f GB, load %.2f s", Double(result.peakMemoryBytes ?? 0) / 1_073_741_824,
+                         Double(result.weightBytes ?? 0) / 1_073_741_824, result.loadDuration?.seconds ?? 0))
+            let db = try SQLiteDatabase(location: .file(try LayXSchema.defaultURL()), migrations: LayXSchema.migrations)
+            try await BenchmarkStore(database: db).save(result)
+            print("  saved run \(result.id)")
         case "--search":
             let support = MLXArchitectureSupport()
             for r in try await HubAPI().search(args.count >= 3 ? args[2] : "", limit: 12) {

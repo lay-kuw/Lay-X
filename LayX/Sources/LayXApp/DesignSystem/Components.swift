@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import LayXCore
 
 // MARK: - Glass transparency environment
 
@@ -501,20 +502,30 @@ struct MetricsStrip: View {
     }
 }
 
+/// Sidebar memory meter: MLX active (gradient), MLX cache (violet), rest of the system (grey) of total RAM.
 struct MemoryMeter: View {
+    @Environment(InferenceStatusModel.self) private var inference
+    private let total = Double(HardwareInfo.current.memoryBytes)
+
     var body: some View {
+        let gb = 1_073_741_824.0
+        let active = Double(inference.engineMemory?.activeBytes ?? 0)
+        let cache = Double(inference.engineMemory?.cacheBytes ?? 0)
+        let system = Double(inference.systemMemoryUsed ?? 0)
+        let other = max(system - active - cache, 0)
+        let chip = HardwareInfo.current.chip.replacingOccurrences(of: "Apple ", with: "")
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("M4 Max · Unified").font(LX.F.caption).foregroundStyle(LX.C.secondary)
+                Text("\(chip) · Unified").font(LX.F.caption).foregroundStyle(LX.C.secondary).lineLimit(1)
                 Spacer()
-                Text("\(Text("18.4").foregroundStyle(LX.C.primary))\(Text(" / 64 GB").foregroundStyle(LX.C.tertiary))")
+                Text("\(Text(String(format: "%.1f", system / gb)).foregroundStyle(LX.C.primary))\(Text(" / \(Int(total / gb)) GB").foregroundStyle(LX.C.tertiary))")
                     .font(LX.F.mono(11.5))
             }
             GeometryReader { geo in
                 HStack(spacing: 2) {
-                    Rectangle().fill(LX.C.liveGradient).frame(width: geo.size.width * 0.14)
-                    Rectangle().fill(Color(hex: 0x5D63B8)).frame(width: geo.size.width * 0.06)
-                    Rectangle().fill(Color(hex: 0x3A3D4E)).frame(width: geo.size.width * 0.09)
+                    Rectangle().fill(LX.C.liveGradient).frame(width: geo.size.width * active / total)
+                    Rectangle().fill(Color(hex: 0x5D63B8)).frame(width: geo.size.width * cache / total)
+                    Rectangle().fill(Color(hex: 0x3A3D4E)).frame(width: geo.size.width * other / total)
                     Spacer(minLength: 0)
                 }
                 .background(Color.white.opacity(0.07))
@@ -524,8 +535,9 @@ struct MemoryMeter: View {
         }
         .padding(10)
         .well(radius: 8)
+        .help(String(format: "Model (MLX active) %.1f GB · MLX cache %.1f GB · other apps & system %.1f GB", active / gb, cache / gb, other / gb))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Memory: 18.4 of 64 gigabytes used")
+        .accessibilityLabel(String(format: "Memory: %.1f of %.0f gigabytes used", system / gb, total / gb))
     }
 }
 

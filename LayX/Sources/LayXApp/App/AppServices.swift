@@ -19,6 +19,7 @@ final class AppServices {
     let models: ModelLibrary
     let chats: ChatSessionStore
     let work = WorkProjects()
+    let performance: PerformanceModel
     private var memoryPressure: DispatchSourceMemoryPressure?
 
     static let modelStorePathKey = "lx.modelStorePath"
@@ -59,9 +60,11 @@ final class AppServices {
                 guard let model = AppServices.defaultChatModel(in: library) else { throw ChatSetupError.noModelInstalled }
                 return try await coordinator.load(model.reference)
             })
+        performance = PerformanceModel(store: database.map(BenchmarkStore.init(database:)), coordinator: coordinator)
         let chats = self.chats
         Task { await chats.loadPinned() }
         startMemoryPressureMonitor()
+        inferenceStatus.startMemoryPolling(coordinator)
     }
 
     /// The model used when a chat needs one and none is loaded: the configured default if installed, else the
@@ -103,6 +106,8 @@ final class InferenceStatusModel {
                 guard let self else { return }
                 if let m = s.lastMetrics, m != self.snapshot.lastMetrics, let id = s.model.loadedModel?.id {
                     self.metricsByModel[id] = m
+                    self.history.insert(LiveSample(date: Date(), client: self.snapshot.activeClient ?? .chat, modelID: id, metrics: m), at: 0)
+                    if self.history.count > 100 { self.history.removeLast() }
                 }
                 self.snapshot = s
             }
@@ -111,6 +116,33 @@ final class InferenceStatusModel {
 
     /// Last measured metrics per model id (this session only; Performance persists benchmark runs separately).
     private(set) var metricsByModel: [String: GenerationMetrics] = [:]
+    /// Recent generations across Chat / Mini Chat / Work / API / Benchmark — numbers only, no content.
+    private(set) var history: [LiveSample] = []
+    private(set) var engineMemory: EngineMemory?
+    private(set) var systemMemoryUsed: Int64?
+    @ObservationIgnored private var pollTask: Task<Void, Never>?
+
+    struct LiveSample: Identifiable, Equatable {
+        let id = UUID()
+        let date: Date
+        let client: InferenceClient
+        let modelID: String
+        let metrics: GenerationMetrics
+    }
+
+    /// Polls memory counters every 2 s (cheap reads; no model access).
+    func startMemoryPolling(_ coordinator: InferenceCoordinator) {
+        guard pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let engine = await coordinator.memory()
+                let system = SystemMemory.usedBytes()
+                self?.engineMemory = engine
+                self?.systemMemoryUsed = system
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
 
     var loadedModel: LoadedModelInfo? { snapshot.model.loadedModel }
     var isGenerating: Bool { snapshot.activeClient != nil }

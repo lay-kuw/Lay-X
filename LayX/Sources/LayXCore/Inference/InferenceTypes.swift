@@ -133,4 +133,15 @@ public protocol InferenceEngine: Sendable {
     /// Streams text for `request`. Must stop promptly when the consuming task is cancelled and must end with
     /// exactly one `.finished` event on success.
     func generate(_ request: GenerationRequest) -> AsyncThrowingStream<GenerationEvent, Error>
+    /// Memory in use by the engine (nil if the backend can't report it). Default: nil.
+    func memory() async -> EngineMemory?
+    /// Resets the engine's peak-memory counter (benchmarks). Default: no-op.
+    func resetPeakMemory() async
+}
+
+extension InferenceEngine {
+    /// Memory in use by the engine (nil if the backend can't report it).
+    public func memory() async -> EngineMemory? { nil }
+    /// Resets the engine's peak-memory counter (benchmarks).
+    public func resetPeakMemory() async {}
 }

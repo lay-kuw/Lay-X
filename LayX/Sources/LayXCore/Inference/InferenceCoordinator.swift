@@ -136,6 +136,12 @@ public actor InferenceCoordinator {
         return true
     }
 
+    // MARK: Memory
+
+    /// Engine memory counters. Reading counters doesn't touch the model, so it bypasses the gate.
+    public nonisolated func memory() async -> EngineMemory? { await engine.memory() }
+    public nonisolated func resetPeakMemory() async { await engine.resetPeakMemory() }
+
     // MARK: Generation
 
     /// Streams a generation. Iteration order: zero or more `.text`, then `.finished`.

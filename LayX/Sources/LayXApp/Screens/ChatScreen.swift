@@ -41,7 +41,7 @@ struct ChatScreen: View {
             MetricsStrip(
                 ttft: metrics.map { String(format: "%.0fms", $0.timeToFirstToken.milliseconds) } ?? "—",
                 tps: metrics?.decodeTokensPerSecond.map { String(format: "%.1f", $0) } ?? "—",
-                memory: inference.loadedModel?.weightBytes.map { String(format: "%.1f", Double($0) / 1e9) } ?? "—",
+                memory: inference.engineMemory.map { String(format: "%.1f", Double($0.activeBytes) / 1_073_741_824) } ?? "—",
                 live: chats.isGenerating(state.currentChatID))
             let pinned = session?.isPinned == true
             Button { state.togglePin() } label: {

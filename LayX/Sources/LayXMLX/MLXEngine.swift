@@ -218,6 +218,17 @@ public actor MLXEngine: InferenceEngine {
         continuation.finish()
     }
 
+    // MARK: Memory
+
+    public func memory() async -> EngineMemory? {
+        let s = Memory.snapshot()
+        return EngineMemory(activeBytes: Int64(s.activeMemory), cacheBytes: Int64(s.cacheMemory), peakBytes: Int64(s.peakMemory))
+    }
+
+    public func resetPeakMemory() async {
+        Memory.peakMemory = 0
+    }
+
     // MARK: Helpers
 
     static func weightBytes(in dir: URL) -> Int64 {
