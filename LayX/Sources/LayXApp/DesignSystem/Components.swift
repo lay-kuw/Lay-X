@@ -268,6 +268,29 @@ struct GeneratingRibbon: View {
     }
 }
 
+/// Live outline for a container that is generating: a cyan→violet gradient that travels around the whole
+/// border, with a soft outer glow. Static when Reduce Motion is on.
+struct GlowingBorder: View {
+    var radius: CGFloat = LX.R.xl
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(paused: reduceMotion)) { ctx in
+            let angle = Angle.degrees((ctx.date.timeIntervalSinceReferenceDate * 110).truncatingRemainder(dividingBy: 360))
+            let gradient = AngularGradient(
+                colors: [LX.C.liveCyan, Color(hex: 0x9D8CFF), LX.C.liveViolet.opacity(0.25), LX.C.liveCyan.opacity(0.25), LX.C.liveCyan],
+                center: .center, angle: angle)
+            let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+            ZStack {
+                shape.strokeBorder(gradient, lineWidth: 1.5)
+                shape.strokeBorder(gradient, lineWidth: 4).blur(radius: 8).opacity(0.55)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 struct BlinkingCaret: View {
     @State private var on = true
     var body: some View {

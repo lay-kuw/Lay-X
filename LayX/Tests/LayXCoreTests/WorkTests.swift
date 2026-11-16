@@ -276,12 +276,14 @@ struct TempProject {
         #expect(p.read("a.txt") == "1\n")
     }
 
-    @Test func workSoulIsAppendedAfterRules() {
-        let s = WorkPrompt.system(persona: "Prefer small diffs. Comment in Japanese.")
-        #expect(s.hasPrefix(WorkPrompt.system))
-        #expect(s.contains("rules above always take precedence"))
-        #expect(s.hasSuffix("Comment in Japanese."))
-        #expect(WorkPrompt.system(persona: "  ") == WorkPrompt.system)
+    @Test func customInstructionsReplaceDefaultButFixedRulesRemain() {
+        let custom = WorkPrompt.system(instructions: "Prefer small diffs. Explain in Japanese.")
+        #expect(custom.hasPrefix("Prefer small diffs."))
+        #expect(!custom.contains("You are Lay X Work"))
+        #expect(custom.hasSuffix(WorkPrompt.fixedRules))
+        #expect(custom.contains("<<<FILE"))
+        #expect(WorkPrompt.system(instructions: "  ") == WorkPrompt.system)
+        #expect(WorkPrompt.system.hasPrefix(WorkPrompt.defaultInstructions))
     }
 
     @Test func folderMentionIncludesItsFiles() throws {

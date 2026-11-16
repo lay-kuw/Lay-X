@@ -10,10 +10,10 @@ enum ChatPreferences {
     static let thinkingKey = "lx.thinking"
     /// The "Soul": persona / standing instructions used as the system prompt for Chat and Mini Chat.
     static let soulKey = "lx.soul"
-    /// Work "Soul": how the assistant should approach code changes (style only).
+    /// Work instructions (replace the default role & style; fixed safety/format rules are always added).
     static let workSoulKey = "lx.workSoul"
 
-    static var workSoul: String? {
+    static var workInstructions: String? {
         let s = (UserDefaults.standard.string(forKey: workSoulKey) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return s.isEmpty ? nil : String(s.prefix(soulLimit))
     }

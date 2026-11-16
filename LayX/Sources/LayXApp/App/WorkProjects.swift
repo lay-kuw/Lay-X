@@ -48,7 +48,7 @@ final class WorkProjects {
             let s = WorkSession(workspace: ws, coordinator: services.coordinator, prepareModel: {
                 guard let model = Self.defaultWorkModel(in: services.models) else { throw ChatSetupError.noModelInstalled }
                 return try await services.coordinator.load(model.reference)
-            }, persona: { ChatPreferences.workSoul })
+            }, instructions: { ChatPreferences.workInstructions })
             sessions[project.id] = s
             return s
         } catch {

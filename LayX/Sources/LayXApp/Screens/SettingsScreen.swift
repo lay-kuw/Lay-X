@@ -235,11 +235,25 @@ struct SettingsScreen: View {
         VStack(alignment: .leading, spacing: 22) {
             SoulEditor(title: "Chat & Mini Chat", text: $soul,
                        placeholder: "Who should the assistant be? e.g. “You are a calm senior engineer. Answer in Japanese unless asked otherwise. Be concise and show code when it helps.”")
-            SoulEditor(title: "Work", text: $workSoul,
-                       placeholder: "How should Work approach your projects? e.g. “Prefer small, focused diffs. Follow the existing code style. Write comments in English and explanations in Japanese.”")
+            SoulEditor(title: "Work instructions",
+                       text: Binding(get: { workSoul.isEmpty ? WorkPrompt.defaultInstructions : workSoul },
+                                     set: { workSoul = $0.trimmingCharacters(in: .whitespacesAndNewlines) == WorkPrompt.defaultInstructions.trimmingCharacters(in: .whitespacesAndNewlines) ? "" : $0 }),
+                       placeholder: "Describe how Work should approach your projects.",
+                       resetTitle: workSoul.isEmpty ? nil : "Reset to default",
+                       onReset: { workSoul = "" })
+            DisclosureGroup {
+                Text(WorkPrompt.fixedRules)
+                    .font(LX.F.mono(11.5)).foregroundStyle(LX.C.secondary).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12).well(radius: LX.R.lg)
+                    .padding(.top, 6)
+            } label: {
+                Text("Always-applied Work rules (read-only — Lay X's safety and diff format depend on them)")
+                    .font(LX.F.caption).foregroundStyle(LX.C.tertiary)
+            }
             HStack(spacing: 10) {
                 Image(systemName: "sparkle").foregroundStyle(LX.C.accentText)
-                Text("Chat's Soul is sent as the system prompt for Chat and Mini Chat. Work's Soul is added after Work's safety rules (it can shape style, not override the rules). Both apply from the next reply and are stored only on this Mac.")
+                Text("Chat & Mini Chat have no built-in instructions — only your Soul is sent (plus search results and a citation note when web search is used). Work instructions replace Work's default role and style; the fixed rules are always added after them. Changes apply from the next reply and are stored only on this Mac.")
                     .font(LX.F.ui(12)).foregroundStyle(Color(hex: 0xC9CBD6)).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
@@ -384,6 +398,9 @@ struct SoulEditor: View {
     let title: String
     @Binding var text: String
     let placeholder: String
+    /// When set, shows a reset button instead of Clear.
+    var resetTitle: String? = nil
+    var onReset: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -410,7 +427,12 @@ struct SoulEditor: View {
                     Text("\(text.count.formatted()) / \(ChatPreferences.soulLimit.formatted())")
                         .font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary)
                     Spacer()
-                    LXButton(title: "Clear") { text = "" }.disabled(text.isEmpty)
+                    if let onReset {
+                        if let resetTitle { LXButton(title: resetTitle) { onReset() } }
+                        else { Text("Default").font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary) }
+                    } else {
+                        LXButton(title: "Clear") { text = "" }.disabled(text.isEmpty)
+                    }
                 }
                 .padding(.horizontal, 16).frame(height: 44)
             }

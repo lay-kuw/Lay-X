@@ -80,6 +80,17 @@ final class CaptureProtocol: URLProtocol, @unchecked Sendable {
         #expect(HTMLText.readable(html) == "Title\nFirst & second.\nThird")
     }
 
+    @Test func readablePrefersMainContentAndDescription() {
+        let filler = String(repeating: "Forecast detail sentence. ", count: 20)
+        let html = """
+        <html><head><meta name="description" content="Tokyo: sunny, 18°C"></head><body>
+        <div>menu menu menu</div><main><h1>Tomorrow</h1><p>\(filler)</p></main><div>footer links</div></body></html>
+        """
+        let text = HTMLText.readable(html)
+        #expect(text.hasPrefix("Tokyo: sunny, 18°C\nTomorrow"))
+        #expect(!text.contains("menu menu"))
+    }
+
     @Test func queryPlanningAndSanitising() {
         #expect(WebQuery.parsePlan("NO", decide: true) == nil)
         #expect(WebQuery.parsePlan("SEARCH: mlx swift latest release", decide: true) == "mlx swift latest release")

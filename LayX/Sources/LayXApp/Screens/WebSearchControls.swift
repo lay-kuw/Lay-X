@@ -2,47 +2,55 @@ import AppKit
 import SwiftUI
 import LayXCore
 
-/// Globe control in the composer: Off / Auto / On. Quiet chip, whole frame clickable.
+/// Globe control in the composer: click cycles Off → Auto → On. Auto uses the accent colour (like Thinking);
+/// On uses the live cyan so it's clear every message goes to the web.
 struct WebSearchMenu: View {
     @AppStorage(WebPreferences.modeKey) private var raw = WebSearchMode.off.rawValue
     @State private var hover = false
     private var mode: WebSearchMode { WebSearchMode(rawValue: raw) ?? .off }
 
     var body: some View {
-        Menu {
-            ForEach([WebSearchMode.on, .auto, .off]) { m in
-                Button { raw = m.rawValue } label: {
-                    if m == mode { Label(title(m), systemImage: "checkmark") } else { Text(title(m)) }
-                }
-            }
-            Divider()
-            Text("Only the search query is sent to \(WebPreferences.config.provider.title). Files and chats are never uploaded.")
-            Button("Web Search Settings…") {
-                AppState.shared.settingsCategory = .web
-                AppState.shared.screen = .settings
+        Button {
+            switch mode {
+            case .off: raw = WebSearchMode.auto.rawValue
+            case .auto: raw = WebSearchMode.on.rawValue
+            case .on: raw = WebSearchMode.off.rawValue
             }
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: mode == .off ? "globe" : "globe.americas.fill").font(.system(size: 11, weight: .medium))
-                if mode != .off { Text(mode == .on ? "Web" : "Auto") }
+                Text(mode == .off ? "Web off" : (mode == .on ? "Web on" : "Web auto"))
             }
             .font(LX.F.caption)
-            .foregroundStyle(mode == .off ? (hover ? LX.C.primary : LX.C.secondary) : LX.C.accentText)
+            .foregroundStyle(color)
             .padding(.horizontal, 8).frame(height: 24)
-            .background(RoundedRectangle(cornerRadius: LX.R.sm, style: .continuous)
-                .fill(mode == .off ? Color.white.opacity(hover ? 0.06 : 0) : LX.C.accent.opacity(hover ? 0.16 : 0.11)))
+            .background(RoundedRectangle(cornerRadius: LX.R.sm, style: .continuous).fill(background))
             .contentShape(Rectangle())
         }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .buttonStyle(PressScaleStyle())
         .onHover { h in withAnimation(LX.M.hover) { hover = h } }
-        .help("Web search: \(mode.title)")
+        .help("Web search: \(mode.title) — click to switch (Off → Auto → On). Only the search query is sent to \(WebPreferences.config.provider.title); files and chats are never uploaded.")
+        .contextMenu {
+            Button("Web Search Settings…") {
+                AppState.shared.settingsCategory = .web
+                AppState.shared.screen = .settings
+            }
+        }
     }
 
-    private func title(_ m: WebSearchMode) -> String {
-        switch m {
-        case .on: "On — search for every message"
-        case .auto: "Auto — search when the model thinks it’s needed"
-        case .off: "Off"
+    private var color: Color {
+        switch mode {
+        case .off: hover ? LX.C.primary : LX.C.secondary
+        case .auto: LX.C.accentText
+        case .on: LX.C.liveCyan
+        }
+    }
+
+    private var background: Color {
+        switch mode {
+        case .off: Color.white.opacity(hover ? 0.06 : 0)
+        case .auto: LX.C.accent.opacity(hover ? 0.16 : 0.11)
+        case .on: LX.C.liveCyan.opacity(hover ? 0.17 : 0.12)
         }
     }
 }

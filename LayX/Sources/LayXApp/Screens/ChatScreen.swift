@@ -121,11 +121,14 @@ struct ModelPicker: View {
     var body: some View {
         Button { withAnimation(LX.M.mini) { open.toggle() } } label: {
             HStack(spacing: 10) {
-                ZStack {
-                    Image(systemName: "cpu").font(.system(size: 15, weight: .regular)).foregroundStyle(LX.C.accentText)
-                    if isLoading { ProgressView().controlSize(.mini).offset(x: 9, y: 8) }
+                Group {
+                    if isLoading {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "cpu").font(.system(size: 15, weight: .regular)).foregroundStyle(LX.C.accentText)
+                    }
                 }
-                .frame(width: 20)
+                .frame(width: 20, height: 20)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title).font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
                     Text(subtitle).font(LX.F.ui(11)).foregroundStyle(LX.C.tertiary).lineLimit(1)
@@ -134,9 +137,8 @@ struct ModelPicker: View {
                     .rotationEffect(.degrees(open ? 180 : 0))
                     .padding(.leading, 6)
             }
-            .padding(.leading, 10).padding(.trailing, 12).frame(height: 40)
-            .background(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous).fill(Color.white.opacity(open ? 0.08 : (hover ? 0.06 : 0.035))))
-            .overlay(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous).strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
+            .padding(.leading, 8).padding(.trailing, 10).frame(height: 40)
+            .background(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous).fill(Color.white.opacity(open ? 0.06 : (hover ? 0.04 : 0))))
             .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleStyle())
@@ -196,9 +198,9 @@ struct ModelPickerPanel: View {
                         Text("No models installed yet.").font(LX.F.body).foregroundStyle(LX.C.tertiary).padding(12)
                     }
                 }
-                .padding(8)
+                .padding(5)
             }
-            .frame(maxHeight: 420)
+            .frame(maxHeight: 340)
             .fixedSize(horizontal: false, vertical: true)
             Rectangle().fill(LX.C.divider).frame(height: 1)
             PickerRowButton {
@@ -206,17 +208,17 @@ struct ModelPickerPanel: View {
                 state.screen = .models
                 close()
             } content: {
-                HStack(spacing: 12) {
-                    Image(systemName: "square.stack.3d.up").font(.system(size: 14)).foregroundStyle(LX.C.accentText).frame(width: 22)
-                    Text("Manage Models").font(LX.F.ui(13, .medium)).foregroundStyle(LX.C.accentText)
+                HStack(spacing: 10) {
+                    Image(systemName: "square.stack.3d.up").font(.system(size: 12)).foregroundStyle(LX.C.accentText).frame(width: 18)
+                    Text("Manage Models").font(LX.F.ui(12.5, .medium)).foregroundStyle(LX.C.accentText)
                     Spacer()
-                    Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(LX.C.tertiary)
                 }
-                .padding(.horizontal, 12).frame(height: 40)
+                .padding(.horizontal, 10).frame(height: 32)
             }
-            .padding(6)
+            .padding(4)
         }
-        .frame(width: 380)
+        .frame(width: 300)
         .background {
             ZStack {
                 RoundedRectangle(cornerRadius: LX.R.window, style: .continuous).fill(.ultraThinMaterial)
@@ -234,8 +236,8 @@ struct ModelPickerPanel: View {
     private func close() { withAnimation(LX.M.mini) { open = false } }
 
     private func header(_ title: String) -> some View {
-        Text(title.uppercased()).font(LX.F.label).kerning(0.8).foregroundStyle(LX.C.tertiary)
-            .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 4)
+        Text(title.uppercased()).font(LX.F.ui(9.5, .semibold)).kerning(0.8).foregroundStyle(LX.C.tertiary)
+            .padding(.horizontal, 10).padding(.top, 5).padding(.bottom, 3)
     }
 
     private func row(_ m: InstalledModel, active: Bool, loading: Bool) -> some View {
@@ -245,22 +247,24 @@ struct ModelPickerPanel: View {
             if !active && !loading { library.load(m) }
             close()
         } content: {
-            HStack(spacing: 12) {
-                Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(LX.C.secondary)
-                    .opacity(active ? 1 : 0).frame(width: 12)
-                    .padding(.trailing, -4)
-                Image(systemName: "cpu").font(.system(size: 15)).foregroundStyle(active ? LX.C.accentText : LX.C.secondary).frame(width: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(parts.name).font(LX.F.ui(13.5, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
-                    Text(ModelDisplay.subtitle(m, withSize: true)).font(LX.F.ui(11.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
+            HStack(spacing: 9) {
+                Group {
+                    if loading { ProgressView().controlSize(.mini) }
+                    else { Image(systemName: active ? "checkmark" : "cpu").font(.system(size: active ? 11 : 13, weight: active ? .semibold : .regular)) }
+                }
+                .foregroundStyle(active ? LX.C.accentText : LX.C.tertiary)
+                .frame(width: 18, height: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(parts.name).font(LX.F.ui(12.5, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
+                    Text(ModelDisplay.subtitle(m, withSize: true)).font(LX.F.ui(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 if loading {
-                    ProgressView().controlSize(.small)
+                    Text("Loading").font(LX.F.ui(10.5)).foregroundStyle(LX.C.tertiary)
                 } else if active {
-                    Text("Active").font(LX.F.ui(11.5, .semibold)).foregroundStyle(LX.C.onGlass)
-                        .padding(.horizontal, 9).frame(height: 22)
-                        .accentGlass(radius: LX.R.sm, strength: 0.8)
+                    Text("Active").font(LX.F.ui(10.5, .semibold)).foregroundStyle(LX.C.onGlass)
+                        .padding(.horizontal, 7).frame(height: 19)
+                        .accentGlass(radius: LX.R.xs, strength: 0.8)
                 } else {
                     Menu {
                         Button("Load") { library.load(m); close() }
@@ -268,13 +272,13 @@ struct ModelPickerPanel: View {
                         Divider()
                         Button("Show in Models") { state.modelsTab = .installed; state.screen = .models; close() }
                     } label: {
-                        Image(systemName: "ellipsis").font(.system(size: 13, weight: .semibold)).foregroundStyle(LX.C.tertiary)
-                            .frame(width: 28, height: 28).contentShape(Rectangle())
+                        Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+                            .frame(width: 24, height: 24).contentShape(Rectangle())
                     }
                     .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                 }
             }
-            .padding(.horizontal, 12).frame(height: 54)
+            .padding(.horizontal, 9).frame(height: 42)
         }
     }
 }
@@ -290,7 +294,7 @@ private struct PickerRowButton<Content: View>: View {
         Button(action: action) {
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous)
+                .background(RoundedRectangle(cornerRadius: LX.R.md, style: .continuous)
                     .fill(selected ? LX.C.accent.opacity(hover ? 0.16 : 0.12) : Color.white.opacity(hover ? 0.06 : 0)))
                 .contentShape(Rectangle())
         }
@@ -319,10 +323,6 @@ struct ChatThread: View {
                     ForEach(Array(session.messages.enumerated()), id: \.element.id) { index, message in
                         let isLast = index == session.messages.count - 1
                         MessageView(message: message, streaming: generating && isLast && message.role == .assistant)
-                        if message.role == .user {
-                            LinearGradient(colors: [Color.white.opacity(0.07), .clear], startPoint: .leading, endPoint: .trailing)
-                                .frame(height: 1)
-                        }
                         if isLast && message.role == .assistant && !generating {
                             MessageActions(sessionID: session.id, message: message)
                         }
@@ -393,6 +393,28 @@ struct MessageView: View, Equatable {
     static func == (a: MessageView, b: MessageView) -> Bool { a.message == b.message && a.streaming == b.streaming }
 
     var body: some View {
+        if message.role == .user { userBody } else { assistantBody }
+    }
+
+    /// The user's turn sits on the right in a quiet bubble.
+    private var userBody: some View {
+        HStack(alignment: .top, spacing: 0) {
+            Spacer(minLength: 120)
+            VStack(alignment: .trailing, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(meta).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
+                    Text("You").font(LX.F.ui(12.5, .semibold))
+                }
+                Text(message.content).font(LX.F.bodyLarge).foregroundStyle(LX.C.body).lineSpacing(6)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: LX.R.xl, style: .continuous).fill(Color.white.opacity(0.06)))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private var assistantBody: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Text(author).font(LX.F.ui(12.5, .semibold))
@@ -571,7 +593,6 @@ struct Composer: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if generating { GeneratingRibbon() }
             TextField(placeholder, text: $state.draft, selection: $selection, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(LX.F.bodyLarge)
@@ -616,7 +637,9 @@ struct Composer: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: LX.R.xl))
         .overlay(RoundedRectangle(cornerRadius: LX.R.xl).strokeBorder(Color.white.opacity(focused ? 0.16 : 0.09), lineWidth: 1))
+        .overlay { if generating { GlowingBorder(radius: LX.R.xl).transition(.opacity) } }
         .shadow(color: .black.opacity(0.35), radius: 20, y: 16)
+        .animation(.easeInOut(duration: 0.3), value: generating)
         .animation(LX.M.hover, value: focused)
         .onAppear { focused = true }
         .onChange(of: state.currentChatID) { focused = true }
