@@ -8,11 +8,15 @@ public struct ChatGenerationSettings: Sendable, Equatable {
     public var systemPrompt: String?
     /// Reasoning mode (`nil` = model default).
     public var thinking: Bool?
+    /// Web search for chat replies.
+    public var webMode: WebSearchMode
 
-    public init(parameters: GenerationParameters = GenerationParameters(), systemPrompt: String? = nil, thinking: Bool? = nil) {
+    public init(parameters: GenerationParameters = GenerationParameters(), systemPrompt: String? = nil, thinking: Bool? = nil,
+                webMode: WebSearchMode = .off) {
         self.parameters = parameters
         self.systemPrompt = systemPrompt
         self.thinking = thinking
+        self.webMode = webMode
     }
 }
 
@@ -37,6 +41,8 @@ public final class ChatSessionStore {
     public private(set) var omittedMessages: [UUID: Int] = [:]
     /// Set when a pinned session couldn't be written.
     public var persistenceError: String?
+    /// Live web-search step per session ("Searching the web for …").
+    public private(set) var webStatus: [UUID: String] = [:]
 
     @ObservationIgnored private let coordinator: InferenceCoordinator
     @ObservationIgnored private var repository: (any PinnedChatStoring)?
@@ -44,6 +50,8 @@ public final class ChatSessionStore {
     /// Called before a generation when no model is loaded; should load the default model or throw.
     @ObservationIgnored private let prepareModel: @MainActor () async throws -> LoadedModelInfo
     @ObservationIgnored private var tasks: [UUID: Task<Void, Never>] = [:]
+    /// Builds the configured researcher (throws if the provider isn't set up). Read-only web access.
+    @ObservationIgnored private let webResearcher: @MainActor () throws -> any WebResearching
     @ObservationIgnored private var writeQueue: Task<Void, Never>?
 
     /// UI flush cadence for streamed text (design doc: buffer tokens, flush ~every 30 ms).
@@ -51,7 +59,9 @@ public final class ChatSessionStore {
 
     public init(coordinator: InferenceCoordinator, repository: (any PinnedChatStoring)?,
                 settings: @escaping @MainActor () -> ChatGenerationSettings,
-                prepareModel: @escaping @MainActor () async throws -> LoadedModelInfo) {
+                prepareModel: @escaping @MainActor () async throws -> LoadedModelInfo,
+                webResearcher: @escaping @MainActor () throws -> any WebResearching = { throw WebSearchError.notConfigured("web search is unavailable") }) {
+        self.webResearcher = webResearcher
         self.coordinator = coordinator
         self.repository = repository
         self.settings = settings
@@ -196,13 +206,30 @@ public final class ChatSessionStore {
             if !Task.isCancelled { errors[id] = Self.message(error) }
             return
         }
-        guard let i = index(id) else { return }
+        guard index(id) != nil else { return }
         let config = settings()
-        let prompt = PromptBuilder.build(history: sessions[i].messages, systemPrompt: config.systemPrompt,
+
+        // Optional web research (read-only: only the planned query leaves the Mac; pages are fetched with GET).
+        var web: WebContext?
+        var webNote: String?
+        if config.webMode != .off, let history = session(id)?.messages {
+            (web, webNote) = await research(for: history, mode: config.webMode, sessionID: id, contextLength: model.contextLength)
+            if Task.isCancelled { webStatus[id] = nil; return }
+        }
+        guard let i = index(id) else { return }
+        var system = config.systemPrompt ?? ""
+        if let web {
+            let budget = max(2000, (model.contextLength ?? 8192) * 3 / 2)
+            system += (system.isEmpty ? "" : "\n\n") + String(WebQuery.contextMessage(web).prefix(budget))
+        }
+        let prompt = PromptBuilder.build(history: sessions[i].messages, systemPrompt: system.isEmpty ? nil : system,
                                          contextLength: model.contextLength, maxOutputTokens: config.parameters.maxTokens)
         omittedMessages[id] = prompt.omittedCount > 0 ? prompt.omittedCount : nil
         sessions[i].modelID = model.id
-        sessions[i].messages.append(ChatMessage(role: .assistant, content: "", modelID: model.id))
+        var reply = ChatMessage(role: .assistant, content: "", modelID: model.id)
+        reply.sources = web?.sources ?? []
+        reply.webNote = webNote
+        sessions[i].messages.append(reply)
         let messageID = sessions[i].messages[sessions[i].messages.count - 1].id
 
         let request = GenerationRequest(messages: prompt.messages, parameters: config.parameters, client: .chat, thinking: config.thinking)
@@ -237,6 +264,40 @@ public final class ChatSessionStore {
             }
         }
         removeIfEmpty(messageID, in: id)
+    }
+
+    /// Plans a query with the model (Auto may decide not to search), then searches and reads top pages.
+    private func research(for history: [ChatMessage], mode: WebSearchMode, sessionID id: UUID,
+                          contextLength: Int?) async -> (WebContext?, String?) {
+        let researcher: any WebResearching
+        do { researcher = try webResearcher() } catch {
+            return (nil, (error as? LocalizedError)?.errorDescription)
+        }
+        webStatus[id] = mode == .auto ? "Deciding whether to search the web…" : "Planning a web search…"
+        defer { webStatus[id] = nil }
+        let recent = history.suffix(5).map { m -> String in
+            let who = m.role == .user ? "User" : "Assistant"
+            return "\(who): \(String(ThinkingParser.stripThinking(m.content).prefix(1500)))"
+        }.joined(separator: "\n")
+        let plan = GenerationRequest(
+            messages: [PromptMessage(role: .system, content: WebQuery.plannerPrompt(decide: mode == .auto)),
+                       PromptMessage(role: .user, content: "Conversation:\n\(recent)\n\nToday is \(Date().formatted(date: .complete, time: .omitted)).")],
+            parameters: GenerationParameters(temperature: 0, topP: 1, maxTokens: 48), client: .chat, thinking: false)
+        var reply = ""
+        do {
+            for try await event in coordinator.generate(plan) { if case .text(let t) = event { reply += t } }
+        } catch {
+            return (nil, Task.isCancelled ? nil : "Web search skipped: \((error as? LocalizedError)?.errorDescription ?? "planning failed").")
+        }
+        guard let query = WebQuery.parsePlan(reply, decide: mode == .auto) else {
+            return (nil, nil)  // Auto decided the web isn't needed.
+        }
+        webStatus[id] = "Searching the web for “\(query)”…"
+        do {
+            return (try await researcher.research(query), nil)
+        } catch {
+            return (nil, "\((error as? LocalizedError)?.errorDescription ?? "Web search failed.") Answered without the web.")
+        }
     }
 
     private func append(_ text: String, to messageID: UUID, in id: UUID) {

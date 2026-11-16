@@ -18,7 +18,7 @@ nonisolated enum CommandLineTools {
         case "--mlx-selftest":
             print("mlx-selftest: \(MLXSelfTest.run())")
             exit(0)
-        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak":
+        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check":
             Task.detached {
                 do {
                     try await run(args)
@@ -35,7 +35,7 @@ nonisolated enum CommandLineTools {
     }
 
     /// Commands handled headlessly; anything else starts the GUI.
-    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak"]
+    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check"]
 
     private static func run(_ args: [String]) async throws {
         let store = ModelStore(root: try ModelStore.defaultRoot())
@@ -191,6 +191,11 @@ nonisolated enum CommandLineTools {
             if let first = samples.dropFirst().first, let last = samples.last {
                 print(String(format: "drift gen %d→%d: RSS %+.1f MB, MLX active %+.1f MB", first.0, last.0, last.1 - first.1, last.2 - first.2))
             }
+        case "--web-check":
+            // LayX --web-check <model> <on|auto> "question" — real MLX + real web search (DuckDuckGo).
+            guard args.count >= 5, let id = ModelRepoID(args[2]), let model = store.installedModel(id),
+                  let mode = WebSearchMode(rawValue: args[3]) else { throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "") }
+            try await WebCheck.run(model: model, mode: mode, question: args[4])
         case "--search":
             let support = MLXArchitectureSupport()
             for r in try await HubAPI().search(args.count >= 3 ? args[2] : "", limit: 12) {
@@ -361,5 +366,41 @@ enum WorkCheck {
         let after = try String(contentsOf: root.appendingPathComponent("Sources/Greeter.swift"), encoding: .utf8)
         print("applied: \(after != original), notice: \(session.notice ?? "-"), error: \(session.error ?? "-")")
         print("--- file after apply ---\n\(after)")
+    }
+}
+
+@MainActor
+enum WebCheck {
+    static func run(model: InstalledModel, mode: WebSearchMode, question: String) async throws {
+        let coordinator = InferenceCoordinator(engine: MLXEngine())
+        try await coordinator.load(model.reference)
+        let store = ChatSessionStore(
+            coordinator: coordinator, repository: nil,
+            settings: { ChatGenerationSettings(parameters: GenerationParameters(temperature: 0.3, maxTokens: 400), thinking: false, webMode: mode) },
+            prepareModel: { throw InferenceError.noModelLoaded },
+            webResearcher: { try WebResearcher(config: WebSearchConfig(provider: .duckDuckGo, maxResults: 5, pagesToRead: 3)) })
+        if ProcessInfo.processInfo.environment["LAYX_DEBUG_PLAN"] == "1" {
+            let plan = GenerationRequest(
+                messages: [PromptMessage(role: .system, content: WebQuery.plannerPrompt(decide: mode == .auto)),
+                           PromptMessage(role: .user, content: "Conversation:\nUser: \(question)\n\nToday is \(Date().formatted(date: .complete, time: .omitted)).")],
+                parameters: GenerationParameters(temperature: 0, topP: 1, maxTokens: 48), client: .chat, thinking: false)
+            var raw = ""
+            for try await e in coordinator.generate(plan) { if case .text(let t) = e { raw += t } }
+            print("planner raw: \(raw.debugDescription)")
+        }
+        let id = store.newSession()
+        let clock = ContinuousClock(), start = clock.now
+        store.send(question, in: id)
+        var lastStatus = ""
+        while !store.generating.isEmpty {
+            if let s = store.webStatus[id], s != lastStatus { print("status: \(s)"); lastStatus = s }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let reply = store.session(id)?.messages.last
+        print("elapsed: \(String(format: "%.1f", (clock.now - start).seconds)) s")
+        print("note: \(reply?.webNote ?? "-")")
+        print("requests: \(reply?.sources.isEmpty == false ? "searched" : "no search")")
+        for (i, s) in (reply?.sources ?? []).enumerated() { print("[\(i + 1)] \(s.host) — \(s.title.prefix(70))") }
+        print("--- reply ---\n\(ThinkingParser.stripThinking(reply?.content ?? "").prefix(900))")
     }
 }

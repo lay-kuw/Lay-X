@@ -22,6 +22,7 @@ public struct PinnedChatRepository: PinnedChatStoring {
                 .text(m.id.uuidString), .text(session.id.uuidString), .int(Int64(index)), .text(m.role.rawValue),
                 .text(m.content), m.modelID.map(SQLValue.text) ?? .null, .double(m.createdAt.timeIntervalSince1970),
                 try m.metrics.map { .blob(try encoder.encode($0)) } ?? .null,
+                m.sources.isEmpty ? .null : .blob(try encoder.encode(m.sources)),
             ]
         }
         let chatRow: [SQLValue] = [
@@ -39,8 +40,8 @@ public struct PinnedChatRepository: PinnedChatStoring {
             try db.execute("DELETE FROM pinned_message WHERE chat_id = ?", [.text(session.id.uuidString)])
             for row in messageRows {
                 try db.execute("""
-                    INSERT INTO pinned_message (id, chat_id, position, role, content, model_id, created_at, metrics)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO pinned_message (id, chat_id, position, role, content, model_id, created_at, metrics, sources)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, row)
             }
         }
@@ -63,9 +64,11 @@ public struct PinnedChatRepository: PinnedChatStoring {
                   let content = row["content"].text
             else { continue }
             let metrics = row["metrics"].blob.flatMap { try? decoder.decode(GenerationMetrics.self, from: $0) }
-            byChat[chatID, default: []].append(ChatMessage(
+            var message = ChatMessage(
                 id: id, role: role, content: content, modelID: row["model_id"].text,
-                createdAt: Date(timeIntervalSince1970: row["created_at"].double ?? 0), metrics: metrics))
+                createdAt: Date(timeIntervalSince1970: row["created_at"].double ?? 0), metrics: metrics)
+            message.sources = row["sources"].blob.flatMap { try? decoder.decode([WebSource].self, from: $0) } ?? []
+            byChat[chatID, default: []].append(message)
         }
         return chats.compactMap { row in
             guard let idText = row["id"].text, let id = UUID(uuidString: idText) else { return nil }

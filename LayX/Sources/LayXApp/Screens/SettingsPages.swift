@@ -280,3 +280,98 @@ struct AdvancedSettings: View {
         message = "Settings were reset."
     }
 }
+
+struct WebSearchSettings: View {
+    let screen: SettingsScreen
+    @AppStorage(WebPreferences.modeKey) private var mode = WebSearchMode.off.rawValue
+    @AppStorage(WebPreferences.providerKey) private var provider = WebSearchProvider.duckDuckGo.rawValue
+    @AppStorage(WebPreferences.searxngURLKey) private var searxng = ""
+    @AppStorage(WebPreferences.maxResultsKey) private var maxResults = 5
+    @AppStorage(WebPreferences.pagesKey) private var pages = 3
+    @State private var braveKey = ""
+    @State private var hasBraveKey = WebPreferences.BraveKey.read() != nil
+    @State private var testResult: String?
+    @State private var testing = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            screen.group("Chat") {
+                screen.row("Web search", "Also switchable with the globe in the composer") {
+                    Segmented(options: [(WebSearchMode.off.rawValue, "Off"), (WebSearchMode.auto.rawValue, "Auto"), (WebSearchMode.on.rawValue, "On")],
+                              selection: $mode)
+                }
+            }
+            screen.group("Search service") {
+                screen.row("Provider", providerHelp) {
+                    Segmented(options: WebSearchProvider.allCases.map { ($0.rawValue, $0.title) }, selection: $provider)
+                }
+                if provider == WebSearchProvider.brave.rawValue {
+                    screen.row("Brave Search API key", hasBraveKey ? "Saved in the macOS Keychain" : "Get a key at api.search.brave.com — stored in the Keychain") {
+                        HStack(spacing: 8) {
+                            SecureField(hasBraveKey ? "••••••••" : "API key", text: $braveKey)
+                                .textFieldStyle(.plain).font(LX.F.mono(12))
+                                .padding(.horizontal, 10).frame(width: 220, height: LX.S.control)
+                                .well(radius: LX.R.md, fill: Color.black.opacity(0.28))
+                            LXButton(title: "Save") {
+                                hasBraveKey = WebPreferences.BraveKey.save(braveKey.trimmingCharacters(in: .whitespaces))
+                                braveKey = ""
+                            }
+                            .disabled(braveKey.trimmingCharacters(in: .whitespaces).isEmpty)
+                            if hasBraveKey {
+                                LXButton(title: "Remove", kind: .danger) { WebPreferences.BraveKey.remove(); hasBraveKey = false }
+                            }
+                        }
+                    }
+                }
+                if provider == WebSearchProvider.searxng.rawValue {
+                    screen.row("SearXNG URL", "Your instance, e.g. http://localhost:8888 (JSON format must be enabled)") {
+                        LXField(placeholder: "https://searx.example", text: $searxng, mono: true).frame(width: 260)
+                    }
+                }
+                screen.row("Results", "How many search results the model sees") {
+                    Segmented(options: [(3, "3"), (5, "5"), (8, "8")], selection: $maxResults, mono: true)
+                }
+                screen.row("Pages to read", "Top results whose pages are opened and read (0 = snippets only)") {
+                    Segmented(options: [(0, "0"), (2, "2"), (3, "3"), (5, "5")], selection: $pages, mono: true)
+                }
+                screen.row("Test", testResult ?? "Runs a sample search with the current settings") {
+                    LXButton(title: testing ? "Testing…" : "Run test") { runTest() }.disabled(testing)
+                }
+            }
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "lock.shield").foregroundStyle(LX.C.accentText)
+                Text("Web search only reads from the internet. Lay X sends the search query (written by the model from your latest message) to the selected service and downloads result pages with plain GET requests — no cookies, no uploads. Local files, project contents and chat history are never sent. Page content is treated as untrusted reference text.")
+                    .font(LX.F.ui(12)).foregroundStyle(Color(hex: 0xC9CBD6)).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: LX.R.lg).fill(LX.C.accent.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: LX.R.lg).strokeBorder(LX.C.accent.opacity(0.16), lineWidth: 1))
+        }
+    }
+
+    private var providerHelp: String {
+        switch WebSearchProvider(rawValue: provider) ?? .duckDuckGo {
+        case .duckDuckGo: "No key needed. Uses DuckDuckGo’s HTML results page (unofficial; may change)"
+        case .brave: "Official API with a free tier. Requires an API key"
+        case .searxng: "Self-hosted metasearch. Most private option"
+        }
+    }
+
+    private func runTest() {
+        testing = true
+        testResult = nil
+        Task {
+            defer { testing = false }
+            do {
+                let researcher = try WebResearcher(config: WebSearchConfig(
+                    provider: WebPreferences.config.provider, braveKey: WebPreferences.config.braveKey,
+                    searxngURL: WebPreferences.config.searxngURL, maxResults: 3, pagesToRead: 1))
+                let ctx = try await researcher.research("Apple Silicon MLX framework")
+                testResult = "OK — \(ctx.sources.count) results, read \(ctx.pageText.count) page(s): \(ctx.sources.first?.host ?? "")"
+            } catch {
+                testResult = (error as? LocalizedError)?.errorDescription ?? "Test failed."
+            }
+        }
+    }
+}

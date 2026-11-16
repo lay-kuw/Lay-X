@@ -12,6 +12,8 @@ actor ScriptedEngine: InferenceEngine {
     private(set) var maxConcurrentGenerations = 0
     private(set) var cancelledGenerations = 0
     private(set) var completedGenerations = 0
+    private(set) var requests: [GenerationRequest] = []
+    func record(_ r: GenerationRequest) { requests.append(r) }
 
     init(tokens: [String] = ["Hel", "lo", "!"], tokenDelay: Duration = .milliseconds(5),
          loadDelay: Duration = .milliseconds(5)) {
@@ -37,6 +39,7 @@ actor ScriptedEngine: InferenceEngine {
     nonisolated func generate(_ request: GenerationRequest) -> AsyncThrowingStream<GenerationEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
+                await self.record(request)
                 await self.begin()
                 let clock = ContinuousClock()
                 let start = clock.now

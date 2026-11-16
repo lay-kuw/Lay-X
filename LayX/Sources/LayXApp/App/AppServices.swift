@@ -131,7 +131,8 @@ final class AppServices {
             prepareModel: {
                 guard let model = AppServices.defaultChatModel(in: library) else { throw ChatSetupError.noModelInstalled }
                 return try await coordinator.load(model.reference)
-            })
+            },
+            webResearcher: { try WebResearcher(config: WebPreferences.config) })
         performance = PerformanceModel(store: database.map(BenchmarkStore.init(database:)), coordinator: coordinator)
         let chats = self.chats
         Task { await chats.loadPinned() }

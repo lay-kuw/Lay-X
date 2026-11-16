@@ -189,6 +189,9 @@ struct MiniChatView: View {
             if hasContent {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 11) {
+                        if let id = model.sessionID, let web = model.chats.webStatus[id] {
+                            Label(web, systemImage: "globe").font(LX.F.mono(10.5)).foregroundStyle(LX.C.liveCyan)
+                        }
                         if let reply = lastReply {
                             let parts = ThinkingParser.split(reply.content)
                             if parts.isThinking && parts.answer.isEmpty {
@@ -196,6 +199,7 @@ struct MiniChatView: View {
                             }
                             MarkdownView(text: parts.answer, compact: true)
                             if model.isGenerating { BlinkingCaret() }
+                            if !reply.sources.isEmpty && !model.isGenerating { WebSourcesView(sources: reply.sources) }
                         } else if model.isGenerating {
                             BlinkingCaret()
                         }
@@ -269,6 +273,7 @@ struct MiniChatView: View {
             }
             .font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
             Spacer()
+            WebSearchMenu()
             IconButton(symbol: "plus", help: "New conversation") { model.newConversation() }
                 .disabled(model.isGenerating)
             IconButton(symbol: model.session?.isPinned == true ? "star.fill" : "star",

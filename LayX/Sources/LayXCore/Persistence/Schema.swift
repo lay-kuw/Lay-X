@@ -34,6 +34,9 @@ public enum LayXSchema {
                 value       TEXT NOT NULL
             );
             """),
+        Migration(version: 2, sql: """
+            ALTER TABLE pinned_message ADD COLUMN sources BLOB;
+            """),
     ]
 
     public static let fileName = "LayX.sqlite"

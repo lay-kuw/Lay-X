@@ -40,7 +40,8 @@ enum ChatPreferences {
         return ChatGenerationSettings(
             parameters: GenerationParameters(temperature: temperature, topP: topP, maxTokens: maxTokens).validated(),
             systemPrompt: soul.isEmpty ? nil : String(soul.prefix(soulLimit)),
-            thinking: thinking)
+            thinking: thinking,
+            webMode: WebPreferences.mode)
     }
 }
 

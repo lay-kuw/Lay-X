@@ -377,6 +377,7 @@ struct ChatThread: View {
     }
 
     private var statusText: String {
+        if let web = chats.webStatus[session.id] { return web }
         if case .loading = inference.snapshot.model { return "loading model…" }
         if inference.snapshot.activeClient != nil && inference.snapshot.activeClient != .chat { return "waiting…" }
         return "thinking…"
@@ -423,8 +424,12 @@ struct MessageView: View, Equatable {
                             .overlay(alignment: .leading) { Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1) }
                     }
                 }
+                if let note = message.webNote {
+                    Label(note, systemImage: "globe").font(LX.F.caption).foregroundStyle(LX.C.tertiary)
+                }
                 MarkdownView(text: parts.answer)
                 if streaming && !parts.isThinking { BlinkingCaret() }
+                if !message.sources.isEmpty && !streaming { WebSourcesView(sources: message.sources) }
             } else {
                 Text(message.content).font(LX.F.bodyLarge).foregroundStyle(LX.C.body).lineSpacing(6).textSelection(.enabled)
             }
@@ -589,6 +594,7 @@ struct Composer: View {
                     .padding(.horizontal, 8).frame(height: 24)
                 }
                 .buttonStyle(QuietButtonStyle(radius: LX.R.sm, active: thinking))
+                WebSearchMenu()
                 .help("Click to switch reasoning on or off for models that support it (e.g. Qwen3). Other models ignore it.")
                 Spacer()
                 contextMeter

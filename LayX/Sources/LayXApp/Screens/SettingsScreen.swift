@@ -9,6 +9,7 @@ struct SettingsScreen: View {
         case inference = "Models & Inference"
         case mini = "Mini Chat"
         case privacy = "Chats & Privacy"
+        case web = "Web Search"
         case api = "API Server"
         case appearance = "Appearance"
         case shortcuts = "Shortcuts"
@@ -23,6 +24,7 @@ struct SettingsScreen: View {
             case .inference: ["model", "memory", "kv", "cache", "temperature", "top-p", "tokens", "storage", "unload", "work"]
             case .mini: ["shortcut", "hotkey", "option space", "panel"]
             case .privacy: ["pinned", "chats", "delete", "history", "database", "privacy"]
+            case .web: ["web", "search", "internet", "brave", "duckduckgo", "searxng", "globe", "sources"]
             case .api: ["server", "port", "lan", "network", "key", "openai"]
             case .appearance: ["glow", "glass", "transparency", "color", "theme"]
             case .shortcuts: ["keyboard", "hotkey", "shortcut"]
@@ -73,6 +75,7 @@ struct SettingsScreen: View {
                     case .soul: soulPage
                     case .general: generalPage
                     case .privacy: privacyPage
+                    case .web: WebSearchSettings(screen: self)
                     case .api: apiPage
                     case .shortcuts: shortcutsPage
                     case .advanced: advancedPage
