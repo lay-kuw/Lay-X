@@ -19,6 +19,9 @@ scripts/build-app.sh            # release build → build/LayX.app (+ MLX GPU se
 scripts/build-app.sh debug      # debug build
 open build/LayX.app
 ```
+
+Disk image (drag-to-Applications): `scripts/make-dmg.sh` → `build/LayX-<version>.dmg`
+(`--no-build` packages the existing `build/LayX.app`). The app is ad-hoc signed, not notarized.
 First run: Models → Discover → download e.g. `mlx-community/Qwen3-4B-4bit`, or paste `owner/name`
 into the field and press Add model.
 
