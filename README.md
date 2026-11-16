@@ -37,7 +37,7 @@ lights that shimmer while the model thinks. 🔮
 | 💬 **Chat** | Streaming replies, Markdown & code, collapsible reasoning (“Thinking” on/off), rename, ★ pin to keep |
 | 🪄 **Mini Chat** | Press **⌥ Space** anywhere → a floating glass box appears. Ask, read, done. |
 | 🛠️ **Work** | Open a project folder, describe a change, get a **diff**. Nothing is written until you press **Apply**. |
-| 🎨 **Image** | Type a prompt, get a picture — SDXL‑family models on MLX (DreamShaper, RealVis, Juggernaut, Animagine…), LoRA, fully offline. |
+| 🎨 **Image** | Type a prompt, get a picture — FLUX.2 klein, Qwen‑Image and SDXL‑family models on MLX, LoRA, image to image, fully offline. |
 | 🌐 **Web search** | Off / Auto / On. DuckDuckGo, Brave or your own SearXNG — only the *query* ever leaves your Mac. |
 | 📦 **Models** | Browse & download MLX models from Hugging Face (trending, likes, downloads…), resume, verify, manage. |
 | 📈 **Performance** | Live speed cards in plain words + real benchmarks (TTFT, prefill, decode, context sweeps). |
@@ -111,28 +111,39 @@ code streams in live, the files it's reading or writing glow in the tree, and if
 
 ## 🎨 Image, the tiny painter
 
-Pick an image model in **Models → Image** (download once, ~7 GB), choose it with the 🎨 palette picker in
+Pick an image model in **Models → Image** (download once, 7–58 GB), choose it with the 🎨 palette picker in
 **Image**, describe what you want and press **Generate** (⌘ Return). Every image lands in the history grid — copy
 it, save it anywhere, reuse its prompt & seed, or toss it. 🖼️
 
 | Model | Good at |
 |---|---|
-| DreamShaper XL Turbo | ⭐ high quality at 1024 px in ~6 steps — start here |
-| SDXL 1.0 | the classic all‑rounder (~30 steps) |
-| RealVisXL 5 · Juggernaut XL 9 | photographs, portraits, cinematic scenes |
+| DreamShaper XL Turbo | ⭐ high quality at 1024 px in ~6 steps — start here (7 GB) |
+| FLUX.2 klein 4B | ⚡ sharp, prompt‑faithful images (and text!) in 4 steps; edits a reference picture (16 GB) |
+| Qwen‑Image Flash | 🔤 superb text and layout in 4 steps, 8‑bit (30 GB) |
+| FLUX.2 klein base 4B | klein with guidance + negative prompt, ~28 steps |
+| Qwen‑Image 2512 | the full 20B Qwen‑Image — best quality, slow (58 GB) |
+| SDXL 1.0 · RealVisXL 5 · Juggernaut XL 9 | all‑rounder, photographs, cinematic scenes |
 | Animagine XL 4 | anime illustration |
 | SDXL Turbo | instant 512 px drafts |
-| *any SDXL repo* | paste `owner/name` (diffusers format) in Models |
+| *more on Hugging Face* | browse SDXL / FLUX.2 klein / Qwen‑Image pipelines in **Models → Image → Discover** |
 
-Tweak **size** (SDXL aspect ratios up to 1344 × 768), **steps**, **guidance (CFG)**, an optional **negative
-prompt** (folded away until you need it), the number of images and the **seed**. Add **LoRA** files
-(`.safetensors`, SDXL — kohya or diffusers format) to change the style or teach a subject; each has its own
-strength slider, and Lay X tells you how many layers it changed. 🧩
+Tweak **size**, **steps**, the number of images and the **seed**. Lay X only shows what the chosen model can
+use, so nothing silently does nothing: 🎛️
+
+| | SDXL | FLUX.2 klein | klein base | Qwen‑Image |
+|---|---|---|---|---|
+| Guidance (CFG) + negative prompt | ✅ | built in | ✅ | ✅ full · built in for Flash |
+| Image to image | ✅ with strength | ✅ as a reference ("make it night") | ✅ as a reference | — |
+| LoRA | ✅ merged at load | ✅ up to 4, switch instantly | ✅ | ✅ up to 4, switch instantly |
+
+Add **LoRA** files (`.safetensors`, kohya / diffusers / PEFT) to change the style or teach a subject — Lay X reads
+each file to see which model it's for and greys out the ones that don't fit. 🧩
 
 Chat and images share one Mac politely: they never use the GPU at the same time, and if memory is tight Lay X
 unloads whichever model is idle (and tells you) so the other one fits. ✨
 
-> Each model comes with its own license (linked in Models) — SDXL Turbo's, for example, limits commercial use.
+> Each model comes with its own license (linked in Models) — SDXL Turbo's, for example, limits commercial use, and
+> Qwen‑Image Flash uses the NVIDIA Open Model License.
 
 ## 🔌 Use it from other apps
 
@@ -178,7 +189,7 @@ Lay-X/
 ├── LayX/            the app (Swift package)
 │   ├── Sources/
 │   │   ├── LayXCore     chats, prompts, inference coordinator, models, Work, performance, SQLite
-│   │   ├── LayXMLX      the MLX engines (text: mlx-swift-lm · images: Stable Diffusion)
+│   │   ├── LayXMLX      the MLX engines (text: mlx-swift-lm · images: SDXL, FLUX.2 klein, Qwen-Image)
 │   │   ├── StableDiffusionMLX  SDXL on MLX + LoRA merging (vendored, MIT)
 │   │   ├── LayXServer   OpenAI-compatible server (Hummingbird)
 │   │   └── LayXApp      SwiftUI app, design system, screens, Mini Chat
@@ -205,6 +216,7 @@ Built with love on top of these wonderful projects:
 [MLX](https://github.com/ml-explore/mlx) & [MLX Swift](https://github.com/ml-explore/mlx-swift) ·
 [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm) ·
 [mlx-swift-examples](https://github.com/ml-explore/mlx-swift-examples) (Stable Diffusion port, MIT) ·
+[flux2-klein-swift](https://github.com/xocialize/flux2-klein-swift) & [qwen-image-edit-swift](https://github.com/xocialize/qwen-image-edit-swift) (FLUX.2 klein / Qwen‑Image ports, MIT) ·
 [Hummingbird](https://github.com/hummingbird-project/hummingbird) ·
 [swift-transformers](https://github.com/huggingface/swift-transformers) ·
 and every model author on [Hugging Face](https://huggingface.co/mlx-community). 🤗

@@ -184,7 +184,7 @@ struct ImageModelPanel: View {
     }
 
     private func row(_ m: InstalledModel) -> some View {
-        let spec = ImageModelSpec.spec(for: m.id)
+        let spec = ImageModelSpec.spec(for: m)
         let active = spec.id == selected?.id
         let loading = studio.phase == .loadingModel && active
         return PickerRowButton(selected: active) {
@@ -274,8 +274,8 @@ struct ImageComposer: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
                 promptBox
-                sourceSection
-                negativeSection
+                if spec.usesGuidance { negativeSection }
+                if spec.family.sourceMode != .none { sourceSection }
                 setting("Size", params.size.aspect) {
                     Menu {
                         ForEach(spec.sizes) { size in
@@ -303,9 +303,11 @@ struct ImageComposer: View {
                                   range: Double(spec.stepRange.lowerBound)...Double(spec.stepRange.upperBound),
                                   marker: Double(spec.defaultSteps))
                 }
-                setting("Guidance (CFG)", params.cfg <= 1 ? "Off" : String(format: "%.1f", params.cfg)) {
-                    CompactSlider(value: Binding(get: { params.cfg }, set: { params.cfg = ($0 * 2).rounded() / 2 }),
-                                  range: spec.cfgRange, marker: spec.defaultCFG)
+                if spec.usesGuidance {
+                    setting("Guidance (CFG)", params.cfg <= 1 ? "Off" : String(format: "%.1f", params.cfg)) {
+                        CompactSlider(value: Binding(get: { params.cfg }, set: { params.cfg = ($0 * 2).rounded() / 2 }),
+                                      range: spec.cfgRange, marker: spec.defaultCFG)
+                    }
                 }
                 setting("Images", count > 1 ? "seed, seed+1, …" : "") {
                     Segmented(options: (1...8).map { ($0, "\($0)") }, selection: $count, mono: true, compact: true)
@@ -357,12 +359,14 @@ struct ImageComposer: View {
         .animation(.easeInOut(duration: 0.3), value: studio.isBusy)
     }
 
-    /// Image to image: a source picture (drop, choose, or "Use as source" from the history) + strength.
+    /// Image to image: a source picture (drop, choose, or "Use as source" from the history) + strength (SDXL), or a
+    /// reference picture the model edits / varies (FLUX.2 klein).
     private var sourceSection: some View {
         @Bindable var studio = studio
+        let reference = spec.family.sourceMode == .reference
         return VStack(alignment: .leading, spacing: 8) {
             DisclosureHeader(title: "Image to image", open: $showSource,
-                             badge: studio.sourceImage == nil ? nil : String(format: "on · %.0f%%", studio.strength * 100))
+                             badge: studio.sourceImage == nil ? nil : reference ? "reference" : String(format: "on · %.0f%%", studio.strength * 100))
             if showSource || studio.sourceImage != nil {
                 if let data = studio.sourceImage, let image = NSImage(data: data) {
                     HStack(spacing: 10) {
@@ -371,7 +375,7 @@ struct ImageComposer: View {
                             .clipShape(RoundedRectangle(cornerRadius: LX.R.md, style: .continuous))
                         VStack(alignment: .leading, spacing: 3) {
                             Text(studio.sourceLabel).font(LX.F.ui(12, .medium)).foregroundStyle(LX.C.primary).lineLimit(1)
-                            Text("\(Int(image.size.width)) × \(Int(image.size.height)) → cropped to \(params.size.label)")
+                            Text("\(Int(image.size.width)) × \(Int(image.size.height))\(reference ? " · reference" : " → cropped to \(params.size.label)")")
                                 .font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
                         }
                         Spacer(minLength: 0)
@@ -379,12 +383,17 @@ struct ImageComposer: View {
                             withAnimation(LX.M.hover) { studio.sourceImage = nil }
                         }
                     }
-                    setting("Strength", String(format: "%.0f%% repainted", studio.strength * 100)) {
-                        CompactSlider(value: Binding(get: { studio.strength }, set: { studio.strength = ($0 * 20).rounded() / 20 }),
-                                      range: 0.1...1, marker: 0.6)
+                    if reference {
+                        Text("\(spec.name) redraws this picture as the prompt says — e.g. “make it night”, “as a watercolor”, “the cat wearing a hat”.")
+                            .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        setting("Strength", String(format: "%.0f%% repainted", studio.strength * 100)) {
+                            CompactSlider(value: Binding(get: { studio.strength }, set: { studio.strength = ($0 * 20).rounded() / 20 }),
+                                          range: 0.1...1, marker: 0.6)
+                        }
+                        Text("Low keeps the picture, high follows the prompt. \(max(1, Int(Double(params.steps) * studio.strength))) of \(params.steps) steps run.")
+                            .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
                     }
-                    Text("Low keeps the picture, high follows the prompt. \(max(1, Int(Double(params.steps) * studio.strength))) of \(params.steps) steps run.")
-                        .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
                 } else {
                     Button(action: chooseSource) {
                         VStack(spacing: 6) {
@@ -467,15 +476,26 @@ struct ImageComposer: View {
 
     private var loraSection: some View {
         @Bindable var studio = studio
-        let active = studio.activeLoRAs.filter { $0.scale != 0 }.count
+        let family = spec.family
+        let usable = Set(studio.loraLibrary.filter { ImageStudio.lora($0, fits: family) }.map(\.file))
+        let active = studio.activeLoRAs.filter { $0.scale != 0 && usable.contains($0.file) }.count
+        // Matching LoRAs first; the others stay listed (greyed) so switching models doesn't hide them.
+        let ordered = studio.loraLibrary.filter { usable.contains($0.file) } + studio.loraLibrary.filter { !usable.contains($0.file) }
         return VStack(alignment: .leading, spacing: 8) {
             DisclosureHeader(title: "LoRA", open: $showLoRAs, badge: active > 0 ? "\(active) on" : nil)
             if showLoRAs {
-                ForEach(studio.loraLibrary) { info in
-                    LoRARow(info: info)
+                ForEach(ordered) { info in
+                    LoRARow(info: info, family: family, usable: usable.contains(info.file),
+                            full: active >= family.maxLoRAs)
                 }
                 if studio.loraLibrary.isEmpty {
-                    Text("Add SDXL LoRA files (.safetensors) to change the style or teach a subject.")
+                    Text("Add \(family.loraBase.displayName) LoRA files (.safetensors) to change the style or teach a subject.")
+                        .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
+                } else if usable.isEmpty {
+                    Text("None of these LoRAs are for \(family.loraBase.displayName).")
+                        .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
+                } else if family.maxLoRAs < 8 {
+                    Text("Up to \(family.maxLoRAs) at once · switching them doesn’t reload the model.")
                         .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: 6) {
@@ -497,18 +517,14 @@ struct ImageComposer: View {
                 Text(error).font(LX.F.caption).foregroundStyle(LX.C.error).fixedSize(horizontal: false, vertical: true)
             }
             if studio.isBusy {
-                LXButton(title: "Stop", symbol: "stop.fill", kind: .danger) { studio.stop() }
+                Button { studio.stop() } label: { PaintButtonLabel(stop: true, title: "Stop", detail: nil) }
+                    .buttonStyle(PaintButtonStyle(stop: true))
                     .keyboardShortcut(.escape, modifiers: [])
-                    .frame(maxWidth: .infinity)
             } else {
                 Button(action: generate) {
-                    HStack(spacing: 7) {
-                        Image(systemName: "sparkles").font(.system(size: 12, weight: .semibold))
-                        Text(count > 1 ? "Generate \(count) images" : "Generate")
-                    }
-                    .frame(maxWidth: .infinity)
+                    PaintButtonLabel(stop: false, title: "Generate", detail: count > 1 ? "\(count) images" : nil)
                 }
-                .buttonStyle(LXButtonStyle(kind: .primary, height: 34))
+                .buttonStyle(PaintButtonStyle(stop: false))
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(studio.draftPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -544,7 +560,7 @@ struct ImageComposer: View {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "safetensors") ?? .data]
         panel.allowsMultipleSelection = true
-        panel.message = "Choose SDXL LoRA files (.safetensors). They are copied into Lay X."
+        panel.message = "Choose LoRA files (.safetensors) for SDXL, FLUX.2 klein 4B or Qwen-Image. They are copied into Lay X."
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { studio.importLoRA(url) }
         showLoRAs = true
@@ -556,6 +572,76 @@ struct ImageComposer: View {
                                      cfg: params.cfg, seed: seed, count: count, size: params.size,
                                      loras: studio.activeLoRAs.filter { $0.scale != 0 },
                                      source: studio.sourceImage, strength: studio.strength), spec: spec)
+    }
+}
+
+/// Generate / Stop: accent glass (no solid fill) with the app's cyan→violet light on the icon and rim.
+struct PaintButtonLabel: View {
+    let stop: Bool
+    let title: String
+    let detail: String?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: stop ? "stop.fill" : "sparkles")
+                .font(.system(size: stop ? 10 : 13, weight: .semibold))
+                .foregroundStyle(stop ? AnyShapeStyle(LX.C.error) : AnyShapeStyle(LX.C.liveGradient))
+            Text(title).font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.onGlass)
+            if let detail {
+                Text(detail).font(LX.F.mono(11)).foregroundStyle(LX.C.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+struct PaintButtonStyle: ButtonStyle {
+    let stop: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        PaintButtonBody(configuration: configuration, stop: stop)
+    }
+
+    private struct PaintButtonBody: View {
+        let configuration: Configuration
+        let stop: Bool
+        @Environment(\.isEnabled) private var enabled
+        @State private var hover = false
+
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous)
+            let lit = enabled && (hover || configuration.isPressed)
+            configuration.label
+                .frame(height: 38)
+                .background {
+                    ZStack {
+                        shape.fill(.ultraThinMaterial)
+                        if stop {
+                            shape.fill(LX.C.error.opacity(lit ? 0.14 : 0.09))
+                        } else {
+                            shape.fill(LinearGradient(colors: [LX.C.liveCyan.opacity(lit ? 0.22 : 0.14),
+                                                               LX.C.liveViolet.opacity(lit ? 0.30 : 0.20)],
+                                                      startPoint: .leading, endPoint: .trailing))
+                        }
+                    }
+                }
+                .clipShape(shape)
+                .overlay {
+                    if stop {
+                        shape.strokeBorder(LX.C.error.opacity(lit ? 0.5 : 0.3), lineWidth: 1)
+                    } else {
+                        shape.strokeBorder(LX.C.liveGradient, lineWidth: 1).opacity(enabled ? (lit ? 0.9 : 0.55) : 0.25)
+                    }
+                }
+                .overlay(shape.strokeBorder(LinearGradient(colors: [LX.C.highlight, .clear], startPoint: .top,
+                                                           endPoint: UnitPoint(x: 0.5, y: 0.5)), lineWidth: 1))
+                .shadow(color: (stop ? LX.C.error : LX.C.liveViolet).opacity(lit ? 0.28 : 0), radius: 14, y: 4)
+                .opacity(enabled ? 1 : 0.45)
+                .scaleEffect(configuration.isPressed ? 0.985 : 1)
+                .contentShape(shape)
+                .onHover { h in withAnimation(LX.M.hover) { hover = h } }
+                .animation(LX.M.hover, value: configuration.isPressed)
+        }
     }
 }
 
@@ -638,22 +724,37 @@ struct CompactSlider: View {
 /// One LoRA: on/off, strength, fit warning, trigger words.
 struct LoRARow: View {
     let info: LoRALibrary.Info
+    let family: ImageFamily
+    /// Made for the current model's base.
+    let usable: Bool
+    /// The model's LoRA limit is reached (unchecked rows can't be switched on).
+    let full: Bool
     private var studio: ImageStudio { AppServices.shared.images }
 
+    private var baseLabel: String? {
+        switch info.fit {
+        case .fits(let base): base.displayName
+        case .otherBase(let base): base
+        case .unknown: nil
+        }
+    }
+
     var body: some View {
-        let index = studio.activeLoRAs.firstIndex { $0.file == info.file }
+        let index = usable ? studio.activeLoRAs.firstIndex { $0.file == info.file } : nil
         let on = index != nil
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Checkbox(isOn: Binding(get: { on }, set: { new in
-                    if new { studio.activeLoRAs.append(LoRAChoice(file: info.file, scale: 1)) }
+                    if new { if !studio.activeLoRAs.contains(where: { $0.file == info.file }) { studio.activeLoRAs.append(LoRAChoice(file: info.file, scale: 1)) } }
                     else { studio.activeLoRAs.removeAll { $0.file == info.file } }
                 }))
-                Text(info.name).font(LX.F.ui(12.5, .medium)).foregroundStyle(LX.C.primary).lineLimit(1).truncationMode(.middle)
+                .disabled(!usable || (!on && full))
+                Text(info.name).font(LX.F.ui(12.5, .medium)).foregroundStyle(usable ? LX.C.primary : LX.C.tertiary)
+                    .lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 4)
-                if case .otherBase(let base) = info.fit {
-                    Image(systemName: "exclamationmark.triangle").font(.system(size: 10)).foregroundStyle(LX.C.warn)
-                        .help("Made for \(base) — it won’t apply to SDXL models")
+                if let baseLabel {
+                    Text(baseLabel).font(LX.F.mono(9.5)).foregroundStyle(usable ? LX.C.tertiary : LX.C.warn).lineLimit(1)
+                        .help(usable ? "Made for \(baseLabel)" : "Made for \(baseLabel) — it can’t be used with \(family.displayName) models")
                 }
                 Menu {
                     Button("Delete LoRA", role: .destructive) { studio.deleteLoRA(info.file) }
@@ -664,10 +765,16 @@ struct LoRARow: View {
                 .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
             }
             if let index {
+                // Bindings look the LoRA up by file: an index captured here goes stale (and traps) when the
+                // checkbox removes the entry while the slider is still on screen.
+                let file = info.file
                 HStack(spacing: 8) {
-                    CompactSlider(value: Binding(get: { studio.activeLoRAs[index].scale },
-                                                 set: { studio.activeLoRAs[index].scale = ($0 * 20).rounded() / 20 }),
-                                  range: 0...1.5, marker: 1)
+                    CompactSlider(value: Binding(get: { studio.activeLoRAs.first { $0.file == file }?.scale ?? 0 },
+                                                 set: { v in
+                                                     guard let i = studio.activeLoRAs.firstIndex(where: { $0.file == file }) else { return }
+                                                     studio.activeLoRAs[i].scale = (v * 20).rounded() / 20
+                                                 }),
+                                  range: family.loraScaleRange, marker: 1)
                     Text(String(format: "%.2f", studio.activeLoRAs[index].scale)).font(LX.F.mono(11)).foregroundStyle(LX.C.secondary)
                         .frame(width: 34, alignment: .trailing)
                 }
@@ -679,6 +786,7 @@ struct LoRARow: View {
         }
         .padding(10)
         .well(radius: LX.R.lg, fill: Color.black.opacity(0.2))
+        .opacity(usable ? 1 : 0.6)
     }
 }
 
@@ -752,12 +860,17 @@ struct ImageDetailBar: View {
     private var studio: ImageStudio { AppServices.shared.images }
 
     private var detailLine: String {
-        var parts = [ImageModelSpec.spec(for: ModelRepoID(record.modelID) ?? ImageModelSpec.sdxlTurbo.id).name,
+        let modelID = ModelRepoID(record.modelID) ?? ImageModelSpec.sdxlTurbo.id
+        let spec = AppServices.shared.models.imageModels.first { $0.id == modelID }.map(ImageModelSpec.spec(for:))
+            ?? ImageModelSpec.spec(for: modelID)
+        var parts = [spec.name,
                      "\(record.width)×\(record.height)", "\(record.steps) step\(record.steps == 1 ? "" : "s")"]
         if record.cfg > 1 { parts.append(String(format: "CFG %.1f", record.cfg)) }
         parts.append("seed \(record.seed)")
         if !record.loras.isEmpty { parts.append(record.loras) }
-        if record.strength > 0 { parts.append(String(format: "img2img %.0f%%", record.strength * 100)) }
+        if record.strength > 0 {
+            parts.append(spec.family.sourceMode == .reference ? "from a reference" : String(format: "img2img %.0f%%", record.strength * 100))
+        }
         parts.append(String(format: "%.1f s", record.duration))
         return parts.joined(separator: " · ")
     }
@@ -860,10 +973,15 @@ struct HistoryThumb: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            if let url = studio.url(for: record) {
-                FileImage(url: url, cornerRadius: LX.R.lg, thumbnail: true)
-                    .aspectRatio(1, contentMode: .fit)
-            }
+            // Square cell; the picture fills it (cropped) whatever its size or aspect.
+            Color.black.opacity(0.25)
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    if let url = studio.url(for: record) {
+                        FileImage(url: url, cornerRadius: 0, thumbnail: true, fill: true)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous))
             if hover {
                 Button { withAnimation(LX.M.hover) { studio.delete(record) } } label: {
                     Image(systemName: "trash").font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.white)
@@ -902,12 +1020,22 @@ struct FileImage: View {
     let url: URL
     var cornerRadius: CGFloat = 8
     var thumbnail = false
+    /// Fill the frame (cropping) instead of fitting inside it.
+    var fill = false
     @State private var image: NSImage?
 
     var body: some View {
         Group {
             if let image {
-                Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
+                if fill {
+                    // A flexible frame the picture covers, so it never dictates the cell's size.
+                    Color.clear.overlay {
+                        Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+                    }
+                    .clipped()
+                } else {
+                    Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
+                }
             } else {
                 Rectangle().fill(Color.white.opacity(0.04)).aspectRatio(1, contentMode: .fit)
             }
@@ -915,8 +1043,17 @@ struct FileImage: View {
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .task(id: url) {
             let url = self.url
-            let data = await Task.detached(priority: thumbnail ? .utility : .userInitiated) { try? Data(contentsOf: url) }.value
-            image = data.flatMap(NSImage.init(data:))
+            let thumbnail = self.thumbnail
+            let cg = await Task.detached(priority: thumbnail ? .utility : .userInitiated) { () -> CGImage? in
+                guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+                guard thumbnail else { return CGImageSourceCreateImageAtIndex(src, 0, nil) }
+                // Decoded at thumbnail size (sharp at 2×, light on memory).
+                let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                                kCGImageSourceThumbnailMaxPixelSize: 512,
+                                                kCGImageSourceCreateThumbnailWithTransform: true]
+                return CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary)
+            }.value
+            image = cg.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
         }
     }
 }

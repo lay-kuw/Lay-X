@@ -20,7 +20,7 @@ enum ImagePreferences {
     @MainActor static var spec: ImageModelSpec? {
         let installed = AppServices.shared.models.imageModels
         let chosen = UserDefaults.standard.string(forKey: modelKey).flatMap { id in installed.first { $0.id.description == id } }
-        return (chosen ?? installed.first).map { ImageModelSpec.spec(for: $0.id) }
+        return (chosen ?? installed.first).map { ImageModelSpec.spec(for: $0) }
     }
 
     static func select(_ id: ModelRepoID) { UserDefaults.standard.set(id.description, forKey: modelKey) }

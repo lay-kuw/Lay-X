@@ -186,9 +186,9 @@ final class ModelLibrary {
                                                          || FileManager.default.fileExists(atPath: partialIndex.path)))
         Task {
             do {
-                let profile: DownloadProfile = isImage ? .sdxl : .languageModel
-                try await downloader.download(id, profile: profile)
-                notice = "\(isImage ? ImageModelSpec.spec(for: id).name : ModelDisplay.name(id)) is ready."
+                let profile: DownloadProfile = isImage ? .imagePipeline : .languageModel
+                let installed = try await downloader.download(id, profile: profile)
+                notice = "\(isImage ? ImageModelSpec.spec(for: installed).name : ModelDisplay.name(id)) is ready."
             } catch is CancellationError {
                 refresh()
             } catch {

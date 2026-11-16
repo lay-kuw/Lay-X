@@ -1,6 +1,6 @@
 import Foundation
 
-/// Output size in pixels (multiples of 64).
+/// Output size in pixels (multiples of the family's step: 64 for SDXL, 16 for FLUX.2 / Qwen-Image).
 public struct ImageSize: Sendable, Hashable, Codable, Identifiable {
     public var width: Int
     public var height: Int
@@ -20,9 +20,98 @@ public struct ImageSize: Sendable, Hashable, Codable, Identifiable {
         .init(1344, 768), .init(768, 1344), .init(768, 768), .init(512, 512),
     ]
     public static let turbo: [ImageSize] = [.init(512, 512), .init(768, 512), .init(512, 768), .init(768, 768), .init(1024, 1024)]
+    /// FLUX.2 klein: ≈1 MP buckets (multiples of 16) plus a larger square.
+    public static let klein: [ImageSize] = [
+        .init(1024, 1024), .init(1152, 896), .init(896, 1152), .init(1248, 832), .init(832, 1248),
+        .init(1360, 768), .init(768, 1360), .init(1280, 1280), .init(768, 768), .init(512, 512),
+    ]
+    /// Qwen-Image: its native ≈1.7 MP buckets and ≈1 MP ones (faster).
+    public static let qwen: [ImageSize] = [
+        .init(1024, 1024), .init(1152, 896), .init(896, 1152), .init(1248, 832), .init(832, 1248),
+        .init(1328, 1328), .init(1472, 1104), .init(1104, 1472), .init(1584, 1056), .init(1056, 1584),
+        .init(1664, 928), .init(928, 1664), .init(768, 768),
+    ]
 }
 
-/// An image model Lay X can run: any SDXL checkpoint in diffusers layout (downloaded once, then offline).
+/// The LoRA formats Lay X can apply (one per base architecture).
+public enum LoRABase: String, Sendable, Hashable, Codable {
+    case sdxl, flux2Klein4B, qwenImage
+
+    public var displayName: String {
+        switch self {
+        case .sdxl: "SDXL"
+        case .flux2Klein4B: "FLUX.2 klein 4B"
+        case .qwenImage: "Qwen-Image"
+        }
+    }
+}
+
+/// Model architecture. Decides what the composer offers (guidance, negative prompt, source image, LoRA) and how
+/// the engine runs it. Stored as the installed model's `modelType`.
+public enum ImageFamily: String, Sendable, Hashable, Codable, CaseIterable {
+    /// Stable Diffusion XL (UNet, CLIP ×2). LoRAs are merged at load.
+    case sdxl
+    /// FLUX.2 klein 4B, step-distilled: ~4 steps, no guidance / negative prompt.
+    case flux2Klein = "flux2-klein"
+    /// FLUX.2 klein base 4B: ~28 steps with guidance and a negative prompt.
+    case flux2KleinBase = "flux2-klein-base"
+    /// Qwen-Image (20B MMDiT + Qwen2.5-VL). Text to image only.
+    case qwenImage = "qwen-image"
+
+    public init(modelType: String?) { self = modelType.flatMap(ImageFamily.init(rawValue:)) ?? .sdxl }
+
+    public var displayName: String {
+        switch self {
+        case .sdxl: "SDXL"
+        case .flux2Klein: "FLUX.2 klein"
+        case .flux2KleinBase: "FLUX.2 klein base"
+        case .qwenImage: "Qwen-Image"
+        }
+    }
+
+    /// Width and height are rounded down to a multiple of this.
+    public var sizeStep: Int { self == .sdxl ? 64 : 16 }
+    public var maxSide: Int { self == .qwenImage ? 1792 : self == .sdxl ? 2048 : 1536 }
+
+    public enum SourceMode: Sendable, Hashable {
+        /// Image to image: the source is noised and repainted (strength = how much).
+        case strength
+        /// The source conditions the model as a reference picture (edits / variations); no strength.
+        case reference
+        /// No image input.
+        case none
+    }
+    public var sourceMode: SourceMode {
+        switch self {
+        case .sdxl: .strength
+        case .flux2Klein, .flux2KleinBase: .reference
+        case .qwenImage: .none
+        }
+    }
+
+    public var loraBase: LoRABase {
+        switch self {
+        case .sdxl: .sdxl
+        case .flux2Klein, .flux2KleinBase: .flux2Klein4B
+        case .qwenImage: .qwenImage
+        }
+    }
+    /// LoRAs are attached to the loaded model (no reload when the selection changes).
+    public var swapsLoRAsLive: Bool { self != .sdxl }
+    public var maxLoRAs: Int { self == .sdxl ? 8 : 4 }
+    public var loraScaleRange: ClosedRange<Double> { self == .sdxl ? 0...1.5 : 0...2 }
+
+    /// Hugging Face pipeline filter for browsing.
+    public var hubFilter: String {
+        switch self {
+        case .sdxl: "diffusers:StableDiffusionXLPipeline"
+        case .flux2Klein, .flux2KleinBase: "diffusers:Flux2KleinPipeline"
+        case .qwenImage: "diffusers:QwenImagePipeline"
+        }
+    }
+}
+
+/// An image model Lay X can run (downloaded once in diffusers layout, then offline).
 public struct ImageModelSpec: Sendable, Hashable, Identifiable {
     public var id: ModelRepoID
     public var name: String
@@ -30,28 +119,37 @@ public struct ImageModelSpec: Sendable, Hashable, Identifiable {
     /// One line for lists ("Photoreal", "Fast drafts", …).
     public var style: String
     public var summary: String
+    public var family: ImageFamily = .sdxl
     /// Approximate download size (shown before the file list is known).
     public var downloadBytes: Int64
     public var sizes: [ImageSize]
     public var defaultSize: ImageSize
     public var defaultSteps: Int
     public var stepRange: ClosedRange<Int>
+    /// Guidance (CFG). A 0...0 range = guidance distilled into the model: no CFG slider, no negative prompt.
     public var defaultCFG: Double
     public var cfgRange: ClosedRange<Double>
     public var license: String
     public var licenseURL: URL
     /// Installed from a repository outside the catalog.
     public var isCustom = false
+    /// Memory kept while loaded (weights).
+    public var residentBytes: Int64 = 7_400_000_000
+    /// Extra memory while generating, per megapixel (activations, VAE decode, per-request encoders).
+    public var activationBytesPerMP: Int64 = 5_000_000_000
 
-    /// Weights (fp16) + text encoders + VAE kept resident.
-    static let weightBytes: Int64 = 7_400_000_000
+    /// CFG slider and negative prompt are offered.
+    public var usesGuidance: Bool { cfgRange.upperBound > 0 }
 
-    /// Memory needed to generate at `size` (weights + activations; the float32 VAE decode dominates at 1 MP).
-    public func runtimeBytes(for size: ImageSize) -> Int64 {
-        Self.weightBytes + 1_000_000_000 + Int64(size.megapixels * 5_000_000_000)
+    /// Memory needed beyond the loaded weights to generate at `size`.
+    public func activationBytes(for size: ImageSize) -> Int64 {
+        1_000_000_000 + Int64(max(size.megapixels, 0.5) * Double(activationBytesPerMP))
     }
 
-    public var downloadProfile: DownloadProfile { .sdxl }
+    /// Memory needed to load and generate at `size`.
+    public func runtimeBytes(for size: ImageSize) -> Int64 { residentBytes + activationBytes(for: size) }
+
+    public var downloadProfile: DownloadProfile { .imagePipeline }
 
     static func hf(_ id: String) -> URL { URL(string: "https://huggingface.co/\(id)")! }
 
@@ -98,19 +196,82 @@ public struct ImageModelSpec: Sendable, Hashable, Identifiable {
         defaultSteps: 28, stepRange: 4...60, defaultCFG: 5, cfgRange: 1...12,
         license: "CreativeML Open RAIL++-M", licenseURL: hf("cagliostrolab/animagine-xl-4.0"))
 
-    public static let catalog: [ImageModelSpec] = [.dreamShaperTurbo, .sdxlBase, .realVis, .juggernaut, .animagine, .sdxlTurbo]
+    // FLUX.2 klein 4B: Qwen3-4B text encoder kept resident with the DiT (≈16 GB in bf16).
+    public static let flux2Klein = ImageModelSpec(
+        id: ModelRepoID("mlx-community/FLUX.2-klein-4B-bf16")!, name: "FLUX.2 klein 4B", publisher: "Black Forest Labs",
+        style: "FLUX · fast", summary: "Sharp, prompt-faithful images in 4 steps. Edits from a reference image.",
+        family: .flux2Klein, downloadBytes: 16_000_000_000, sizes: ImageSize.klein, defaultSize: .init(1024, 1024),
+        defaultSteps: 4, stepRange: 1...12, defaultCFG: 0, cfgRange: 0...0,
+        license: "Apache 2.0", licenseURL: hf("black-forest-labs/FLUX.2-klein-4B"),
+        residentBytes: 16_200_000_000, activationBytesPerMP: 11_000_000_000)
+
+    public static let flux2KleinBase = ImageModelSpec(
+        id: ModelRepoID("mlx-community/FLUX.2-klein-base-4B-bf16")!, name: "FLUX.2 klein base 4B", publisher: "Black Forest Labs",
+        style: "FLUX · quality", summary: "The undistilled klein: guidance and negative prompts, ~28 steps.",
+        family: .flux2KleinBase, downloadBytes: 16_000_000_000, sizes: ImageSize.klein, defaultSize: .init(1024, 1024),
+        defaultSteps: 28, stepRange: 8...50, defaultCFG: 4, cfgRange: 1.5...8,
+        license: "Apache 2.0", licenseURL: hf("black-forest-labs/FLUX.2-klein-base-4B"),
+        residentBytes: 16_200_000_000, activationBytesPerMP: 12_400_000_000)
+
+    // Qwen-Image: the 7B text encoder loads per prompt and is released before denoising (activation figure).
+    public static let qwenImageFlash = ImageModelSpec(
+        id: ModelRepoID("mlx-community/Qwen-Image-Flash-8bit")!, name: "Qwen-Image Flash", publisher: "Qwen · NVIDIA",
+        style: "Qwen · text in images", summary: "Qwen-Image distilled to 4 steps (8-bit). Excellent at text and layout.",
+        family: .qwenImage, downloadBytes: 29_500_000_000, sizes: ImageSize.qwen, defaultSize: .init(1024, 1024),
+        defaultSteps: 4, stepRange: 2...8, defaultCFG: 0, cfgRange: 0...0,
+        license: "NVIDIA Open Model License", licenseURL: hf("nvidia/Qwen-Image-Flash"),
+        residentBytes: 22_100_000_000, activationBytesPerMP: 8_000_000_000)
+
+    public static let qwenImage2512 = ImageModelSpec(
+        id: ModelRepoID("Qwen/Qwen-Image-2512")!, name: "Qwen-Image 2512", publisher: "Qwen",
+        style: "Qwen · best quality", summary: "Full Qwen-Image (bf16, 20B). Highest quality, slow: ~30–50 steps.",
+        family: .qwenImage, downloadBytes: 57_700_000_000, sizes: ImageSize.qwen, defaultSize: .init(1328, 1328),
+        defaultSteps: 30, stepRange: 10...60, defaultCFG: 4, cfgRange: 1.5...8,
+        license: "Apache 2.0", licenseURL: hf("Qwen/Qwen-Image-2512"),
+        residentBytes: 41_200_000_000, activationBytesPerMP: 12_000_000_000)
+
+    public static let catalog: [ImageModelSpec] = [
+        .dreamShaperTurbo, .flux2Klein, .qwenImageFlash, .sdxlBase, .realVis, .juggernaut, .animagine,
+        .flux2KleinBase, .qwenImage2512, .sdxlTurbo,
+    ]
 
     public static func spec(_ id: String) -> ImageModelSpec? { catalog.first { $0.id.description == id } }
 
-    /// Catalog entry, or generic SDXL defaults for a repository installed by name.
-    public static func spec(for id: ModelRepoID) -> ImageModelSpec {
+    /// Catalog entry, or defaults for the family of a repository installed by name.
+    public static func spec(for id: ModelRepoID, family: ImageFamily? = nil) -> ImageModelSpec {
         if let known = spec(id.description) { return known }
-        return ImageModelSpec(
-            id: id, name: id.name.replacingOccurrences(of: "-", with: " "), publisher: id.owner, style: "SDXL",
-            summary: "SDXL checkpoint added from Hugging Face.",
-            downloadBytes: 6_940_000_000, sizes: ImageSize.sdxl, defaultSize: .init(1024, 1024),
-            defaultSteps: 30, stepRange: 1...60, defaultCFG: 5, cfgRange: 0...15,
-            license: "See the model page", licenseURL: hf(id.description), isCustom: true)
+        let family = family ?? .sdxl
+        let base: ImageModelSpec
+        switch family {
+        case .sdxl:
+            base = ImageModelSpec(
+                id: id, name: "", publisher: "", style: "SDXL", summary: "SDXL checkpoint added from Hugging Face.",
+                downloadBytes: 6_940_000_000, sizes: ImageSize.sdxl, defaultSize: .init(1024, 1024),
+                defaultSteps: 30, stepRange: 1...60, defaultCFG: 5, cfgRange: 0...15,
+                license: "", licenseURL: hf(id.description))
+        case .flux2Klein: base = .flux2Klein
+        case .flux2KleinBase: base = .flux2KleinBase
+        case .qwenImage:
+            // Distilled fine-tunes run like Flash; anything else like the full model.
+            let lower = id.name.lowercased()
+            let distilled = ["flash", "lightning", "turbo", "4step", "8step", "fast"].contains { lower.contains($0) }
+            base = distilled ? .qwenImageFlash : .qwenImage2512
+        }
+        var spec = base
+        spec.id = id
+        spec.name = id.name.replacingOccurrences(of: "-", with: " ")
+        spec.publisher = id.owner
+        spec.style = family.displayName
+        spec.summary = "\(family.displayName) model added from Hugging Face."
+        spec.license = "See the model page"
+        spec.licenseURL = hf(id.description)
+        spec.isCustom = true
+        return spec
+    }
+
+    /// The spec of an installed model (its family comes from the install manifest).
+    public static func spec(for installed: InstalledModel) -> ImageModelSpec {
+        spec(for: installed.id, family: ImageFamily(modelType: installed.manifest.modelType))
     }
 }
 
@@ -143,6 +304,33 @@ public enum SDXLFiles {
             }
         }
         return (missing.isEmpty ? out : nil, missing)
+    }
+}
+
+/// The files of a FLUX.2 / Qwen-Image pipeline: `model_index.json` and every config, tokenizer file and
+/// safetensors weight of its components (other weight formats are skipped).
+public enum DiffusersFiles {
+    static let components: Set<String> = ["transformer", "text_encoder", "tokenizer", "vae", "scheduler"]
+    static let extensions: Set<String> = ["json", "safetensors", "txt", "jinja", "model"]
+    static let required = [
+        "model_index.json", "scheduler/scheduler_config.json", "transformer/config.json", "vae/config.json",
+        "text_encoder/config.json",
+    ]
+
+    public static func select(from all: [HubFile]) -> (files: [HubFile]?, missing: [String]) {
+        let picked = all.filter { f in
+            if f.path == "model_index.json" { return true }
+            let parts = f.path.split(separator: "/")
+            guard parts.count == 2, components.contains(String(parts[0])) else { return false }
+            return extensions.contains((f.path as NSString).pathExtension.lowercased())
+        }
+        let paths = Set(picked.map(\.path))
+        var missing = required.filter { !paths.contains($0) }
+        for folder in ["transformer", "text_encoder", "vae"] where !paths.contains(where: { $0.hasPrefix(folder + "/") && $0.hasSuffix(".safetensors") }) {
+            missing.append("\(folder)/*.safetensors")
+        }
+        if !paths.contains(where: { $0.hasPrefix("tokenizer/") }) { missing.append("tokenizer/") }
+        return (missing.isEmpty ? picked : nil, missing)
     }
 }
 
@@ -233,9 +421,15 @@ public enum ImageEngineError: Error, LocalizedError, Equatable {
 public protocol ImageEngine: Sendable {
     /// Loads the model with the LoRAs merged in (reloading replaces any previous model).
     func load(_ spec: ImageModelSpec, directory: URL, loras: [LoRAFile]) async throws -> LoRALoadReport
+    /// Replaces the LoRAs on the loaded model without reloading it. nil = not supported (reload instead).
+    func setLoRAs(_ loras: [LoRAFile]) async throws -> LoRALoadReport?
     func unload() async
     /// Streams progress and images. Cancelling the consuming task stops at the next step.
     func generate(_ request: ImageRequest) -> AsyncThrowingStream<ImageEvent, Error>
+}
+
+extension ImageEngine {
+    public func setLoRAs(_ loras: [LoRAFile]) async throws -> LoRALoadReport? { nil }
 }
 
 /// One saved image in the history.

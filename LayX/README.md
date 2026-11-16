@@ -45,6 +45,7 @@ $B --serve        mlx-community/Qwen3-4B-4bit 18234 # headless API server (add "
 $B --soak         mlx-community/Qwen3-4B-4bit 80    # memory drift over repeated generations
 $B --image-check  [image-model] [text-model]        # download if needed, generate, memory arbitration
 #   env: LAYX_IMAGE_SIZE=1216x832 LAYX_IMAGE_STEPS=6 LAYX_IMAGE_CFG=2 LAYX_IMAGE_NEG="…" LAYX_IMAGE_LORA=/x.safetensors:0.8
+#        LAYX_IMAGE_LORA_SWAP=1 (LoRA switched on for the 2nd image) LAYX_IMAGE_SOURCE=/x.png LAYX_IMAGE_STRENGTH=0.6
 $B --search qwen3 ; $B --list-models ; $B --keychain-check
 ```
 
@@ -56,7 +57,7 @@ Source: `Sources/LayXIcon/LX.png` (square, ≥ 1024 px). `scripts/build-app.sh` 
 | Target | Contents |
 |---|---|
 | `LayXCore` | persistence (SQLite), chat store, prompt building, inference coordinator, models (Hub, downloader, store), Work (workspace, diff, change sets), performance (benchmarks), shared |
-| `LayXMLX` | `MLXEngine` (mlx-swift-lm 3.32.3), `MLXImageEngine` |
+| `LayXMLX` | `MLXEngine` (mlx-swift-lm 3.32.3), `MLXImageEngine` (SDXL via `StableDiffusionMLX`; FLUX.2 klein 4B via `Klein` from flux2-klein-swift; Qwen-Image via `QwenImageEdit` from qwen-image-edit-swift — only their engine-free core libraries are linked, weights read from the local folder) |
 | `StableDiffusionMLX` | SDXL on MLX — vendored from ml-explore/mlx-swift-examples (MIT, notice in the folder); reads local weights only. Lay X additions: any SDXL diffusers checkpoint, size micro-conditioning, LoRA merging (`LoRA.swift`) |
 | `LayXServer` | OpenAI-compatible server (Hummingbird 2.28.1), API keys (Keychain) |
 | `LayXApp` | SwiftUI app — design system from `DesignPreview/`, screens, Mini Chat panel |

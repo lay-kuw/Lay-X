@@ -20,16 +20,28 @@ actor ScriptedImageEngine: ImageEngine {
     }
 
     private(set) var lastLoRAs: [LoRAFile] = []
+    private(set) var lastRequest: ImageRequest?
+    private(set) var loraSwaps = 0
+    /// Behaves like the FLUX.2 / Qwen-Image engines: LoRAs switch on the loaded model.
+    var liveLoRAs = false
+    func setLiveLoRAs(_ v: Bool) { liveLoRAs = v }
     func load(_ spec: ImageModelSpec, directory: URL, loras: [LoRAFile]) async throws -> LoRALoadReport {
         loads += 1; loaded = true; lastLoRAs = loras
         return LoRALoadReport(appliedLayers: loras.isEmpty ? 0 : 140)
     }
+    func setLoRAs(_ loras: [LoRAFile]) async throws -> LoRALoadReport? {
+        guard liveLoRAs else { return nil }
+        loraSwaps += 1; lastLoRAs = loras
+        return LoRALoadReport(appliedLayers: loras.isEmpty ? 0 : 96)
+    }
+    func record(_ r: ImageRequest) { lastRequest = r }
     func unload() async { unloads += 1; loaded = false }
     func setRunning(_ v: Bool) { running = v }
 
     nonisolated func generate(_ request: ImageRequest) -> AsyncThrowingStream<ImageEvent, Error> {
         AsyncThrowingStream { c in
             let task = Task {
+                await self.record(request)
                 await self.setRunning(true)
                 defer { Task { await self.setRunning(false) } }
                 do {
@@ -126,6 +138,36 @@ struct ImageHistoryStoreTests {
         let custom = ImageModelSpec.spec(for: ModelRepoID("someone/my-sdxl")!)
         #expect(custom.isCustom && custom.defaultSize == ImageSize(1024, 1024))
         #expect(ImageModelSpec.dreamShaperTurbo.runtimeBytes(for: .init(1024, 1024)) > ImageModelSpec.dreamShaperTurbo.runtimeBytes(for: .init(512, 512)))
+        for spec in ImageModelSpec.catalog {
+            #expect(spec.sizes.allSatisfy { $0.width % spec.family.sizeStep == 0 && $0.height % spec.family.sizeStep == 0 && max($0.width, $0.height) <= spec.family.maxSide }, "\(spec.name)")
+        }
+        #expect(!ImageModelSpec.flux2Klein.usesGuidance && ImageModelSpec.flux2KleinBase.usesGuidance)
+        #expect(ImageModelSpec.qwenImageFlash.runtimeBytes(for: .init(1024, 1024)) > ImageModelSpec.flux2Klein.runtimeBytes(for: .init(1024, 1024)))
+    }
+
+    @Test func customModelsTakeTheirFamilyDefaults() {
+        let lightning = ImageModelSpec.spec(for: ModelRepoID("someone/Qwen-Image-Lightning")!, family: .qwenImage)
+        #expect(lightning.family == .qwenImage && lightning.defaultSteps == 4 && !lightning.usesGuidance && lightning.isCustom)
+        let full = ImageModelSpec.spec(for: ModelRepoID("unsloth/Qwen-Image")!, family: .qwenImage)
+        #expect(full.usesGuidance && full.defaultSteps > 20)
+        let base = ImageModelSpec.spec(for: ModelRepoID("someone/klein-base-ft")!, family: .flux2KleinBase)
+        #expect(base.family == .flux2KleinBase && base.name == "klein base ft")
+        #expect(ImageFamily(modelType: nil) == .sdxl && ImageFamily(modelType: "qwen-image") == .qwenImage)
+    }
+
+    @Test func diffusersFilesTakeComponentsOnly() {
+        func f(_ p: String) -> HubFile { HubFile(path: p, size: 1, sha256: nil) }
+        let repo = ["model_index.json", "scheduler/scheduler_config.json", "transformer/config.json",
+                    "transformer/diffusion_pytorch_model.safetensors", "text_encoder/config.json",
+                    "text_encoder/model-00001-of-00002.safetensors", "text_encoder/model-00002-of-00002.safetensors",
+                    "text_encoder/model.safetensors.index.json", "tokenizer/tokenizer.json", "tokenizer/chat_template.jinja",
+                    "vae/config.json", "vae/diffusion_pytorch_model.safetensors",
+                    "flux-2-klein-4b.safetensors", "editing.jpg", "README.md", "transformer/diffusion_pytorch_model.bin"].map(f)
+        let picked = DiffusersFiles.select(from: repo).files?.map(\.path) ?? []
+        #expect(picked.count == 12)
+        #expect(!picked.contains("flux-2-klein-4b.safetensors") && !picked.contains("transformer/diffusion_pytorch_model.bin"))
+        let broken = DiffusersFiles.select(from: repo.filter { !$0.path.hasPrefix("vae/") })
+        #expect(broken.files == nil && broken.missing.contains("vae/config.json"))
     }
 }
 
@@ -151,7 +193,7 @@ struct LoRALibraryTests {
         try write(["lora_unet_input_blocks_4_1_proj_in.lora_down.weight": t, "lora_te2_text_model_encoder_layers_0_mlp_fc1.lora_up.weight": t,
                    "__metadata__": ["ss_tag_frequency": "{\"img\": {\"pixel art\": 30, \"cat\": 2}}"]], to: xl)
         let info = try lib.importFile(xl)
-        #expect(info.fit == .sdxl)
+        #expect(info.fit == .fits(.sdxl))
         #expect(info.triggerWords.first == "pixel art")
 
         let sd15 = tmp.appendingPathComponent("old.safetensors")
@@ -160,7 +202,7 @@ struct LoRALibraryTests {
 
         let diffusersXL = tmp.appendingPathComponent("papercut.safetensors")
         try write(["lora_unet_down_blocks_1_attentions_0_proj_in.lora_down.weight": t], to: diffusersXL)
-        #expect(try lib.importFile(diffusersXL).fit == .sdxl)
+        #expect(try lib.importFile(diffusersXL).fit == .fits(.sdxl))
 
         #expect(throws: LoRALibrary.ImportError.alreadyExists("pixel-xl")) { try lib.importFile(xl) }
         let notST = tmp.appendingPathComponent("x.ckpt"); try Data("x".utf8).write(to: notST)
@@ -170,6 +212,25 @@ struct LoRALibraryTests {
         try lib.delete("pixel-xl.safetensors")
         #expect(lib.list().map(\.name) == ["old", "papercut"])
         #expect(lib.url(for: "../evil.safetensors") == nil)
+    }
+    @Test func tellsBaseModelsApart() {
+        func fit(_ keys: [String], _ base: String = "") -> LoRALibrary.Info.Fit { LoRALibrary.fit(keys: keys, base: base) }
+        // FLUX.2 klein 4B: 5 double / 20 single blocks (BFL and diffusers names).
+        #expect(fit(["diffusion_model.double_blocks.4.img_attn.qkv.lora_A.weight", "diffusion_model.single_blocks.19.linear1.lora_A.weight"])
+                == .fits(.flux2Klein4B))
+        #expect(fit(["transformer.transformer_blocks.3.attn.to_q.lora_A.weight",
+                     "transformer.single_transformer_blocks.12.attn.to_qkv_mlp_proj.lora_A.weight"]) == .fits(.flux2Klein4B))
+        // FLUX.1: 19 double / 38 single blocks, or its single-block proj_mlp.
+        #expect(fit(["lora_unet_double_blocks_18_img_attn_qkv.lora_down.weight"]) == .otherBase("FLUX.1"))
+        #expect(fit(["transformer.single_transformer_blocks.2.proj_mlp.lora_A.weight"]) == .otherBase("FLUX.1"))
+        // Qwen-Image: per-stream MLPs / modulation.
+        #expect(fit(["transformer_blocks.59.img_mlp.net.0.proj.lora_A.weight"]) == .fits(.qwenImage))
+        #expect(fit(["x"], "Qwen-Image") == .fits(.qwenImage))
+        #expect(fit(["transformer.transformer_blocks.59.attn.to_k.lora.down.weight"]) == .fits(.qwenImage))
+        #expect(fit(["x"], "flux-2-klein-9b") == .otherBase("FLUX.2 klein 9B"))
+        #expect(fit(["lora_te2_text_model_encoder_layers_0_mlp_fc1.lora_up.weight"]) == .fits(.sdxl))
+        #expect(fit(["something"]) == .unknown)
+        #expect(LoRALibrary.maxIndex(["single_transformer_blocks.30.x", "transformer_blocks.2.y"], after: ["transformer_blocks"]) == 2)
     }
 }
 
@@ -318,6 +379,62 @@ struct ImageStudioTests {
         studio.generate(ImageRequest(prompt: "p", steps: 1, seed: 2, loras: [lora]), spec: .sdxlTurbo)
         try await waitIdle(studio)
         #expect(await engine.loads == 2)
+    }
+
+    @Test func requestsFollowTheModelFamily() async throws {
+        let engine = ScriptedImageEngine()
+        let (studio, dir) = try makeStudio(engine: engine, coordinator: InferenceCoordinator(engine: ScriptedEngine()), free: { .max })
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // klein (distilled): no guidance / negative, the source is a reference (whole schedule), sizes step by 16.
+        studio.generate(ImageRequest(prompt: "p", negativePrompt: "blurry", steps: 4, cfg: 5, seed: 1, size: .init(1000, 1000),
+                                     source: Data([1]), strength: 0.4), spec: .flux2Klein)
+        try await waitIdle(studio)
+        var r = await engine.lastRequest
+        #expect(r?.cfg == 0 && r?.negativePrompt == "" && r?.strength == 1 && r?.source != nil && r?.size == .init(992, 992))
+        #expect(r?.effectiveSteps == 4)
+        // Qwen-Image: text to image only.
+        studio.generate(ImageRequest(prompt: "p", steps: 4, seed: 1, size: .init(1328, 1328), source: Data([1])), spec: .qwenImageFlash)
+        try await waitIdle(studio)
+        r = await engine.lastRequest
+        #expect(r?.source == nil && r?.size == .init(1328, 1328))
+        #expect(studio.history.first?.strength == 0)
+        // klein base keeps guidance and the negative prompt.
+        studio.generate(ImageRequest(prompt: "p", negativePrompt: "blurry", steps: 8, cfg: 4, seed: 1), spec: .flux2KleinBase)
+        try await waitIdle(studio)
+        r = await engine.lastRequest
+        #expect(r?.cfg == 4 && r?.negativePrompt == "blurry")
+    }
+
+    @Test func liveLoRAsSwitchWithoutReloading() async throws {
+        let engine = ScriptedImageEngine()
+        await engine.setLiveLoRAs(true)
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("lx-lora-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        func lora(_ name: String, _ header: String) throws {
+            var length = UInt64(header.utf8.count).littleEndian
+            var data = Data(bytes: &length, count: 8); data.append(Data(header.utf8))
+            try data.write(to: tmp.appendingPathComponent(name))
+        }
+        let t = #"{"dtype":"F16","shape":[4,4],"data_offsets":[0,32]}"#
+        try lora("qwen.safetensors", #"{"transformer_blocks.0.img_mlp.net.0.proj.lora_A.weight":\#(t)}"#)
+        try lora("xl.safetensors", #"{"lora_te2_text_model_encoder_layers_0_mlp_fc1.lora_up.weight":\#(t)}"#)
+        let db = try SQLiteDatabase(location: .inMemory, migrations: LayXSchema.migrations)
+        let studio = ImageStudio(engine: engine, coordinator: InferenceCoordinator(engine: ScriptedEngine()),
+                                 store: ImageHistoryStore(database: db, folder: tmp.appendingPathComponent("img")),
+                                 loras: LoRALibrary(folder: tmp), modelDirectory: { _ in tmp }, availableMemory: { .max },
+                                 keepLoaded: { nil })
+        studio.generate(ImageRequest(prompt: "p", steps: 1, seed: 1), spec: .qwenImageFlash)
+        try await waitIdle(studio)
+        // The SDXL LoRA is dropped for a Qwen-Image model; the Qwen one switches on in place.
+        let choices = [LoRAChoice(file: "qwen.safetensors", scale: 1.5), LoRAChoice(file: "xl.safetensors", scale: 1)]
+        studio.generate(ImageRequest(prompt: "p", steps: 1, seed: 1, loras: choices), spec: .qwenImageFlash)
+        try await waitIdle(studio)
+        #expect(await engine.loads == 1)
+        #expect(await engine.loraSwaps == 1)
+        #expect(await engine.lastLoRAs.map(\.url.lastPathComponent) == ["qwen.safetensors"])
+        #expect(studio.notice?.contains("96 layers") == true)
+        #expect(studio.history.first?.loras == "qwen ×1.5")
     }
 
     @Test func releasesImageModelForTextModel() async throws {

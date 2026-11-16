@@ -109,12 +109,24 @@ public final class ImageStudio {
         guard !prompt.isEmpty, !isBusy else { return }
         var req = request
         req.prompt = prompt
+        let family = spec.family
         req.steps = min(max(req.steps, 1), 100)
         req.count = min(max(req.count, 1), 8)
         req.strength = min(max(req.strength, 0.05), 1)
-        req.cfg = min(max(req.cfg, 0), 20)
-        req.size = ImageSize(min(max(req.size.width / 64 * 64, 256), 2048), min(max(req.size.height / 64 * 64, 256), 2048))
-        req.loras = req.loras.filter { $0.scale != 0 && loras?.url(for: $0.file) != nil }
+        req.cfg = spec.usesGuidance ? min(max(req.cfg, 0), 20) : 0
+        if !spec.usesGuidance { req.negativePrompt = "" }
+        switch family.sourceMode {
+        case .strength: break
+        case .reference: req.strength = 1      // the whole schedule runs; the source is a reference
+        case .none: req.source = nil
+        }
+        let step = family.sizeStep
+        req.size = ImageSize(min(max(req.size.width / step * step, 256), family.maxSide),
+                             min(max(req.size.height / step * step, 256), family.maxSide))
+        req.loras = Array(req.loras.filter { choice in
+            guard choice.scale != 0, loras?.url(for: choice.file) != nil else { return false }
+            return loraLibrary.first { $0.file == choice.file }.map { Self.lora($0, fits: family) } ?? true
+        }.prefix(family.maxLoRAs))
         error = nil
         notice = nil
         idleTask?.cancel()
@@ -180,10 +192,23 @@ public final class ImageStudio {
 
     private func ensureLoaded(_ spec: ImageModelSpec, loras choices: [LoRAChoice], size: ImageSize) async throws {
         let total = spec.runtimeBytes(for: size)
-        if loadedModelID == spec.id.description, loadedLoRAs == choices {
-            // Loaded: only the activations for this size must fit.
-            try await makeRoom(need: total - ImageModelSpec.weightBytes)
-            return
+        let files = choices.compactMap { c in loras?.url(for: c.file).map { LoRAFile(url: $0, scale: c.scale) } }
+        if loadedModelID == spec.id.description {
+            if loadedLoRAs == choices {
+                // Loaded: only the activations for this size must fit.
+                try await makeRoom(need: spec.activationBytes(for: size))
+                return
+            }
+            // Models that attach LoRAs at run time switch them in place.
+            if spec.family.swapsLoRAsLive {
+                phase = .loadingModel
+                if let report = try await engine.setLoRAs(files) {
+                    loadedLoRAs = choices
+                    reportLoRAs(report, files: files, spec: spec)
+                    try await makeRoom(need: spec.activationBytes(for: size))
+                    return
+                }
+            }
         }
         guard let directory = modelDirectory(spec) else {
             throw ImageEngineError.loadFailed("\(spec.name) isn’t downloaded yet")
@@ -192,14 +217,25 @@ public final class ImageStudio {
         try await makeRoom(need: total)
         phase = .loadingModel
         try Task.checkCancellation()
-        let files = choices.compactMap { c in loras?.url(for: c.file).map { LoRAFile(url: $0, scale: c.scale) } }
         let report = try await engine.load(spec, directory: directory, loras: files)
         loadedModelID = spec.id.description
         loadedLoRAs = choices
-        if !files.isEmpty {
-            notice = report.appliedLayers == 0
-                ? "The LoRA didn’t match \(spec.name) — is it made for SDXL?"
-                : "LoRA applied to \(report.appliedLayers) layers\(report.skippedLayers > 0 ? " (\(report.skippedLayers) skipped)" : "")."
+        reportLoRAs(report, files: files, spec: spec)
+    }
+
+    private func reportLoRAs(_ report: LoRALoadReport, files: [LoRAFile], spec: ImageModelSpec) {
+        guard !files.isEmpty else { return }
+        notice = report.appliedLayers == 0
+            ? "The LoRA didn’t match \(spec.name) — is it made for \(spec.family.loraBase.displayName)?"
+            : "LoRA applied to \(report.appliedLayers) layers\(report.skippedLayers > 0 ? " (\(report.skippedLayers) skipped)" : "")."
+    }
+
+    /// A LoRA can be used with `family` (unknown formats are tried; the engine reports what applied).
+    public static func lora(_ info: LoRALibrary.Info, fits family: ImageFamily) -> Bool {
+        switch info.fit {
+        case .fits(let base): base == family.loraBase
+        case .unknown: true
+        case .otherBase: false
         }
     }
 
@@ -258,11 +294,14 @@ public final class ImageStudio {
             let info = try loras.importFile(url)
             refreshLoRAs()
             switch info.fit {
-            case .sdxl, .unknown:
+            case .fits(let base):
+                notice = "Added \(info.name) (\(base.displayName))."
+                if !activeLoRAs.contains(where: { $0.file == info.file }) { activeLoRAs.append(LoRAChoice(file: info.file, scale: 1)) }
+            case .unknown:
                 notice = "Added \(info.name)."
                 if !activeLoRAs.contains(where: { $0.file == info.file }) { activeLoRAs.append(LoRAChoice(file: info.file, scale: 1)) }
             case .otherBase(let base):
-                notice = "Added \(info.name), but it was made for \(base) — it won’t apply to SDXL models."
+                notice = "Added \(info.name), but it was made for \(base) — Lay X can’t apply it."
             }
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? "The LoRA couldn’t be added."

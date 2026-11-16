@@ -14,6 +14,8 @@ struct ImageModelsPane: View {
     @State private var hubNext: URL?
     @State private var hubLoading = false
     @State private var hubError: String?
+    /// Architecture browsed on Hugging Face (one pipeline filter at a time).
+    @State private var hubFamily: ImageFamily = .sdxl
     private var library: ModelLibrary { AppServices.shared.models }
     private var studio: ImageStudio { AppServices.shared.images }
 
@@ -24,16 +26,22 @@ struct ImageModelsPane: View {
         }
     }
 
+    /// Installed models use their recorded family; Hub results the family being browsed.
+    private func spec(_ id: ModelRepoID) -> ImageModelSpec {
+        if let m = library.imageModels.first(where: { $0.id == id }) { return ImageModelSpec.spec(for: m) }
+        return ImageModelSpec.spec(for: id, family: hubFamily)
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if tab == .installed { installed } else { discover }
-                    ForEach(library.activeDownloads.filter { d in ImageModelSpec.spec(d.id.description) != nil }, id: \.id) { d in
+                    ForEach(library.activeDownloads.filter { d in ImageModelSpec.spec(d.id.description) != nil || hubResults.contains { $0.id == d.id } }, id: \.id) { d in
                         HStack(spacing: 10) {
                             Image(systemName: "arrow.down.circle.fill").foregroundStyle(LX.C.liveCyan)
                                 .symbolEffect(.pulse, options: .repeating)
-                            Text(ImageModelSpec.spec(for: d.id).name).font(LX.F.ui(12.5, .medium))
+                            Text(spec(d.id).name).font(LX.F.ui(12.5, .medium))
                             ProgressView(value: d.progress.fraction).tint(LX.C.accent)
                             Text("\(Int(d.progress.fraction * 100))%").font(LX.F.mono(11)).foregroundStyle(LX.C.secondary)
                             IconButton(symbol: "xmark", help: "Cancel") { library.cancelDownload(d.id) }
@@ -52,7 +60,7 @@ struct ImageModelsPane: View {
                                               : ImageModelSpec.catalog.first?.id.description
             }
         }
-        .confirmationDialog("Delete \(confirmDelete.map { ImageModelSpec.spec(for: $0.id).name } ?? "model")?",
+        .confirmationDialog("Delete \(confirmDelete.map { ImageModelSpec.spec(for: $0).name } ?? "model")?",
                             isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
                             presenting: confirmDelete) { m in
             Button("Delete \(ModelDisplay.bytes(m.diskBytes))", role: .destructive) {
@@ -72,7 +80,7 @@ struct ImageModelsPane: View {
         VStack(spacing: 0) {
             header(["Image model", "Style", "Size", "Default"])
             ForEach(library.imageModels) { m in
-                let spec = ImageModelSpec.spec(for: m.id)
+                let spec = ImageModelSpec.spec(for: m)
                 let id = m.id.description
                 let inUse = ImagePreferences.spec?.id == m.id
                 row(selected: selection == id) {
@@ -122,23 +130,35 @@ struct ImageModelsPane: View {
             .well().clipShape(RoundedRectangle(cornerRadius: LX.R.lg))
             hubSection
         }
-        .task(id: "\(filter)|\(hubSort.rawValue)") {
+        .task(id: "\(filter)|\(hubSort.rawValue)|\(hubFamily.rawValue)") {
             try? await Task.sleep(for: .milliseconds(350))   // debounce typing
             guard !Task.isCancelled else { return }
             await searchHub(reset: true)
         }
     }
 
-    // MARK: Hugging Face (every SDXL pipeline in diffusers format)
+    // MARK: Hugging Face (every pipeline of a supported architecture in diffusers format)
 
     private var hubSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                SectionLabel(text: "On Hugging Face", trailing: "SDXL · diffusers").fixedSize()
+                SectionLabel(text: "On Hugging Face", trailing: "diffusers").fixedSize()
                 if hubLoading { ProgressView().controlSize(.small) }
                 Spacer()
                 Segmented(options: [(HubAPI.Sort.downloads, "Downloads"), (.trending, "Trending"), (.likes, "Likes"), (.updated, "Updated")],
                           selection: $hubSort)
+            }
+            HStack(spacing: 10) {
+                Segmented(options: [(ImageFamily.sdxl, "SDXL"), (.flux2Klein, "FLUX.2 klein"), (.qwenImage, "Qwen-Image")],
+                          selection: $hubFamily)
+                    .fixedSize()
+                Spacer()
+            }
+            if hubFamily != .sdxl {
+                Text(hubFamily == .qwenImage
+                     ? "Qwen-Image models in bf16 (or Lay X’s 8-bit layout). Pre-quantized repos (bnb, SDNQ, Nunchaku) and Edit models aren’t supported."
+                     : "FLUX.2 klein 4B in bf16 — distilled (4 steps) and base (with guidance). 9B models and pre-quantized repos aren’t supported.")
+                    .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
             }
             VStack(spacing: 0) {
                 header(["Model", "Author", "Downloads", "Status"])
@@ -160,7 +180,7 @@ struct ImageModelsPane: View {
                 if let hubError {
                     Text(hubError).font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary).padding(.horizontal, 12).frame(height: LX.S.tableRow)
                 } else if hubResults.isEmpty && !hubLoading {
-                    Text(filter.isEmpty ? "No results." : "No SDXL models found for “\(filter)”.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary)
+                    Text(filter.isEmpty ? "No results." : "No \(hubFamily.displayName) models found for “\(filter)”.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).frame(height: LX.S.tableRow)
                 }
             }
@@ -201,7 +221,7 @@ struct ImageModelsPane: View {
             } else {
                 let q = filter.trimmingCharacters(in: .whitespaces)
                 page = try await hub.searchPage(ModelRepoID(q) != nil ? "" : q, author: ModelRepoID(q)?.owner, sort: hubSort,
-                                                limit: 40, filter: "diffusers:StableDiffusionXLPipeline")
+                                                limit: 40, filter: hubFamily.hubFilter)
             }
             hubResults = reset ? page.results : hubResults + page.results
             hubNext = page.next
@@ -227,7 +247,7 @@ struct ImageModelsPane: View {
     @ViewBuilder private var details: some View {
         let id = selection.flatMap(ModelRepoID.init)
         if let id {
-            let spec = ImageModelSpec.spec(for: id)
+            let spec = spec(id)
             let installed = library.imageModels.first { $0.id == id }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -237,9 +257,12 @@ struct ImageModelsPane: View {
                     }
                     Text(spec.summary).font(LX.F.body).foregroundStyle(LX.C.body).fixedSize(horizontal: false, vertical: true)
                     VStack(alignment: .leading, spacing: 6) {
+                        kv("Type", spec.family.displayName)
                         kv("Style", spec.style)
                         kv("Publisher", spec.publisher)
-                        kv("Default", "\(spec.defaultSize.label) · \(spec.defaultSteps) steps · CFG \(spec.defaultCFG <= 1 ? "off" : String(format: "%.1f", spec.defaultCFG))")
+                        kv("Default", "\(spec.defaultSize.label) · \(spec.defaultSteps) steps · " + (spec.usesGuidance
+                            ? "CFG \(spec.defaultCFG <= 1 ? "off" : String(format: "%.1f", spec.defaultCFG))" : "guidance built in"))
+                        kv("Supports", Self.features(spec))
                         kv("On disk", installed.map { ModelDisplay.bytes($0.diskBytes) } ?? "≈ \(ModelDisplay.bytes(spec.downloadBytes)) download")
                         kv("Memory", String(format: "≈ %.0f GB at %@", Double(spec.runtimeBytes(for: spec.defaultSize)) / 1_073_741_824, spec.defaultSize.label))
                         HStack {
@@ -277,6 +300,18 @@ struct ImageModelsPane: View {
         } else {
             Text("Select a model").font(LX.F.body).foregroundStyle(LX.C.tertiary).frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    static func features(_ spec: ImageModelSpec) -> String {
+        var out: [String] = []
+        if spec.usesGuidance { out.append("negative prompt") }
+        switch spec.family.sourceMode {
+        case .strength: out.append("image to image")
+        case .reference: out.append("reference image (edits)")
+        case .none: break
+        }
+        out.append("\(spec.family.loraBase.displayName) LoRA")
+        return out.joined(separator: " · ")
     }
 
     private func use(_ id: ModelRepoID) {

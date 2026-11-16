@@ -1,5 +1,5 @@
 {
-  "originHash" : "ecd7ae3c53e4f9d760d3bd18cc5f0ff4339d6525b8cbff7bc00440d1aeb9e0aa",
+  "originHash" : "663bac10569f0920700c3cf51552fed6aa1e331ad92449403ab9c18b83736ed4",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "d2dfb39bcb0fafd1834ec6e6334c1755360f856e",
         "version" : "1.37.0"
+      }
+    },
+    {
+      "identity" : "designscaffold",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/DesignScaffold",
+      "state" : {
+        "revision" : "4e44017bbfb1c445aabbe85687f0a1a00ba193f2",
+        "version" : "0.26.0"
       }
     },
     {
@@ -20,12 +29,57 @@
       }
     },
     {
+      "identity" : "flux2-klein-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/flux2-klein-swift",
+      "state" : {
+        "revision" : "a7334fcd79119731b4ad47ef906bc6f8fd94327a",
+        "version" : "0.11.0"
+      }
+    },
+    {
+      "identity" : "flux2-vae-mlx-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/flux2-vae-mlx-swift",
+      "state" : {
+        "revision" : "91db3f6ff26a415687a6f7d82655e9c2b366362b",
+        "version" : "0.8.0"
+      }
+    },
+    {
       "identity" : "hummingbird",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/hummingbird-project/hummingbird",
       "state" : {
         "revision" : "341e11f65d8e24cf87e9aae427c040f0084ada4e",
         "version" : "2.28.1"
+      }
+    },
+    {
+      "identity" : "mlx-engine-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/mlx-engine-swift",
+      "state" : {
+        "revision" : "1faa000573f05169f0862e2880acdf7ad7808045",
+        "version" : "0.74.0"
+      }
+    },
+    {
+      "identity" : "mlx-exact-conv-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/mlx-exact-conv-swift",
+      "state" : {
+        "revision" : "885f79331f84a6299440ac7f09823d9bafce7460",
+        "version" : "0.1.1"
+      }
+    },
+    {
+      "identity" : "mlx-profiling",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/mlx-profiling.git",
+      "state" : {
+        "revision" : "a1cee71340e28253b1796c655ac861756c87452d",
+        "version" : "0.1.0"
       }
     },
     {
@@ -44,6 +98,24 @@
       "state" : {
         "revision" : "3b339ad6e3b3f44c8121ecff5131c7fd55e075e6",
         "version" : "3.32.3"
+      }
+    },
+    {
+      "identity" : "qwen-image-edit-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/qwen-image-edit-swift",
+      "state" : {
+        "revision" : "6a5725cfcf621a6e37ec50813837b5ec3f5a7ee0",
+        "version" : "0.12.0"
+      }
+    },
+    {
+      "identity" : "qwen25vl-mlx-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/qwen25vl-mlx-swift",
+      "state" : {
+        "revision" : "fce2c55c080f5df77110b23e45b831a7f0d86df5",
+        "version" : "0.5.0"
       }
     },
     {
@@ -150,8 +222,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/swift-huggingface.git",
       "state" : {
-        "revision" : "c30143a4616f3fa994ee3ab3e3464f752845c07c",
-        "version" : "1.0.0"
+        "revision" : "f0a0cb43cb1b402d2bbf6fb10d8981328c449c48",
+        "version" : "0.13.0"
       }
     },
     {

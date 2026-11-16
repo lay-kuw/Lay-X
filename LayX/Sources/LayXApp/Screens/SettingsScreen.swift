@@ -26,7 +26,7 @@ struct SettingsScreen: View {
             case .mini: ["shortcut", "hotkey", "option space", "panel"]
             case .privacy: ["pinned", "chats", "delete", "history", "database", "privacy"]
             case .web: ["web", "search", "internet", "brave", "duckduckgo", "searxng", "globe", "sources"]
-            case .image: ["image", "picture", "sdxl", "stable diffusion", "generate", "art", "memory"]
+            case .image: ["image", "picture", "sdxl", "flux", "qwen", "stable diffusion", "generate", "art", "memory"]
             case .api: ["server", "port", "lan", "network", "key", "openai"]
             case .appearance: ["glow", "glass", "transparency", "color", "theme"]
             case .shortcuts: ["keyboard", "hotkey", "shortcut"]

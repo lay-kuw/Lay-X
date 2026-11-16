@@ -1,7 +1,7 @@
 import Foundation
 
 /// LoRA adapters imported by the user: `.safetensors` files copied into one folder (`~/.config/lay-x/loras`).
-/// Only the file header is read here (to tell SDXL LoRAs from others); weights are merged by the engine.
+/// Only the file header is read here (to tell which base model a LoRA is for); weights are merged by the engine.
 public struct LoRALibrary: Sendable {
     public let folder: URL
 
@@ -15,8 +15,9 @@ public struct LoRALibrary: Sendable {
 
     public struct Info: Sendable, Hashable, Identifiable {
         public enum Fit: Sendable, Hashable {
-            case sdxl
-            /// Made for another base model (SD 1.x / 2.x / Flux…): it won't apply.
+            /// Made for a base Lay X runs.
+            case fits(LoRABase)
+            /// Made for another base model (SD 1.x / 2.x, FLUX.1, klein 9B…): it won't apply.
             case otherBase(String)
             case unknown
         }
@@ -100,12 +101,16 @@ public struct LoRALibrary: Sendable {
         return object
     }
 
-    /// SDXL LoRAs touch the second text encoder (`lora_te2_` / `text_encoder_2`) or SDXL-only UNet blocks; SD 1.x
-    /// LoRAs have attention in the first down block (`down_blocks_0_attentions`), which SDXL doesn't.
+    /// Which base a LoRA is for, from its metadata and tensor names:
+    /// - SDXL: second text encoder (`lora_te2_` / `text_encoder_2`) or SDXL-only UNet blocks; SD 1.x has attention
+    ///   in the first down block, which SDXL doesn't.
+    /// - Qwen-Image: per-stream MLP / modulation names (`img_mlp`, `txt_mlp`, `img_mod`).
+    /// - FLUX: `double_blocks` / `single_blocks` (BFL) or `single_transformer_blocks` (diffusers). klein 4B has 5
+    ///   double and 20 single blocks; FLUX.1 and klein 9B have more.
     static func inspect(_ header: [String: Any]) -> (LoRALibrary.Info.Fit, String?, [String]) {
         let keys = header.keys.filter { $0 != "__metadata__" }
         let meta = header["__metadata__"] as? [String: String] ?? [:]
-        let base = meta["ss_base_model_version"] ?? meta["modelspec.architecture"]
+        let base = meta["ss_base_model_version"] ?? meta["modelspec.architecture"] ?? meta["base_model"]
         var triggers: [String] = []
         if let tags = meta["ss_tag_frequency"], let data = tags.data(using: .utf8),
            let freq = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Int]] {
@@ -119,24 +124,64 @@ public struct LoRALibrary: Sendable {
             .sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
             .prefix(3).map(\.key)
         }
-        let lowerBase = base?.lowercased() ?? ""
-        if lowerBase.contains("sdxl") || lowerBase.contains("xl") { return (.sdxl, base, triggers) }
-        if lowerBase.contains("flux") || lowerBase.contains("sd_v1") || lowerBase.contains("sd_v2") || lowerBase.contains("stable-diffusion-v1") {
-            return (.otherBase(base ?? "another model"), base, triggers)
+        return (fit(keys: keys, base: base ?? ""), base, triggers)
+    }
+
+    static func fit(keys: [String], base: String) -> LoRALibrary.Info.Fit {
+        let lowerBase = base.lowercased()
+        if lowerBase.contains("qwen") { return .fits(.qwenImage) }
+        if lowerBase.contains("klein") {
+            return lowerBase.contains("9b") ? .otherBase("FLUX.2 klein 9B") : .fits(.flux2Klein4B)
+        }
+        if lowerBase.contains("sdxl") || lowerBase.contains("xl") { return .fits(.sdxl) }
+        if lowerBase.contains("sd_v1") || lowerBase.contains("sd_v2") || lowerBase.contains("stable-diffusion-v1") {
+            return .otherBase("SD 1.x / 2.x")
+        }
+        if keys.contains(where: { $0.contains("img_mlp") || $0.contains("txt_mlp") || $0.contains("img_mod") || $0.contains("txt_mod") }) {
+            return .fits(.qwenImage)
+        }
+        let hasSingle = keys.contains { $0.contains("single_blocks") || $0.contains("single_transformer_blocks") }
+        // Attention-only Qwen-Image LoRAs: 60 joint blocks and no single-stream ones (FLUX has ≤ 19 joint blocks).
+        if !hasSingle, maxIndex(keys, after: ["transformer_blocks"]) >= 19 { return .fits(.qwenImage) }
+        let isFlux = keys.contains { $0.contains("double_blocks") || $0.contains("single_blocks") || $0.contains("single_transformer_blocks") }
+        if isFlux || lowerBase.contains("flux") {
+            let double = maxIndex(keys, after: ["double_blocks", "transformer_blocks"])
+            let single = maxIndex(keys, after: ["single_blocks", "single_transformer_blocks"])
+            if double >= 5 || single >= 20 { return .otherBase(lowerBase.contains("flux.2") || lowerBase.contains("flux2") ? "FLUX.2 (not klein 4B)" : "FLUX.1") }
+            // FLUX.1 names its single-block MLP `proj_mlp`; FLUX.2 fuses it into the attention projection.
+            if keys.contains(where: { $0.contains("proj_mlp") }) || lowerBase.contains("flux.1") || lowerBase.contains("flux-1") {
+                return .otherBase("FLUX.1")
+            }
+            return .fits(.flux2Klein4B)
         }
         if keys.contains(where: { $0.contains("lora_te2_") || $0.hasPrefix("text_encoder_2.") || $0.contains("input_blocks_7_1") }) {
-            return (.sdxl, base, triggers)
+            return .fits(.sdxl)
         }
         if keys.contains(where: { $0.contains("down_blocks_0_attentions") || $0.contains("down_blocks.0.attentions") }) {
-            return (.otherBase("SD 1.x / 2.x"), base, triggers)
-        }
-        if keys.contains(where: { $0.contains("double_blocks") || $0.contains("single_blocks") }) {
-            return (.otherBase("Flux"), base, triggers)
+            return .otherBase("SD 1.x / 2.x")
         }
         // UNet attention LoRA without any first-down-block attention: SDXL's layout.
         if keys.contains(where: { $0.contains("down_blocks_1_attentions") || $0.contains("down_blocks.1.attentions") }) {
-            return (.sdxl, base, triggers)
+            return .fits(.sdxl)
         }
-        return (.unknown, base, triggers)
+        return .unknown
+    }
+
+    /// Largest block number after any of `markers` ("…double_blocks.12.…" / "…double_blocks_12_…"), or -1.
+    /// A marker preceded by "single_" doesn't count (`transformer_blocks` vs `single_transformer_blocks`).
+    static func maxIndex(_ keys: [String], after markers: [String]) -> Int {
+        var best = -1
+        for key in keys {
+            for marker in markers {
+                var search = key.startIndex..<key.endIndex
+                while let range = key.range(of: marker, range: search) {
+                    search = range.upperBound..<key.endIndex
+                    if !marker.hasPrefix("single"), key[..<range.lowerBound].hasSuffix("single_") { continue }
+                    let rest = key[range.upperBound...].drop { $0 == "." || $0 == "_" }
+                    if let n = Int(rest.prefix { $0.isNumber }) { best = max(best, n) }
+                }
+            }
+        }
+        return best
     }
 }

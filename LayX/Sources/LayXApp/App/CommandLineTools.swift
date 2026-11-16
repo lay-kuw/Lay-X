@@ -213,24 +213,26 @@ nonisolated enum CommandLineTools {
             //   LAYX_IMAGE_RESERVE_GB=n pretends n GB less memory is free.
             let env = ProcessInfo.processInfo.environment
             let imageID = args.count >= 3 ? (ModelRepoID(args[2]) ?? ImageModelSpec.sdxlTurbo.id) : ImageModelSpec.sdxlTurbo.id
-            let spec = ImageModelSpec.spec(for: imageID)
+            var spec = ImageModelSpec.spec(for: imageID)
             if !(store.installedModel(spec.id)?.isImageModel ?? false) {
                 let downloader = ModelDownloader(store: store, architectures: MLXArchitectureSupport())
+                let downloadID = spec.id
                 let watcher = Task {
                     var last = -1
                     for await states in await downloader.updates() {
-                        if case .active(let p)? = states[spec.id] {
+                        if case .active(let p)? = states[downloadID] {
                             let pct = Int(p.fraction * 100) / 10 * 10
                             if pct != last { last = pct; print("download \(p.phase.rawValue) \(pct)% \(p.receivedBytes / 1_000_000) MB") }
                         }
                     }
                 }
                 let t0 = Date()
-                let installed = try await downloader.download(spec.id, profile: .sdxl)
+                let installed = try await downloader.download(spec.id, profile: .imagePipeline)
                 watcher.cancel()
                 print(String(format: "installed in %.0f s, %.2f GB, files: %@", Date().timeIntervalSince(t0), Double(installed.diskBytes) / 1e9,
                              installed.manifest.files.map(\.path).filter { $0.hasSuffix(".safetensors") }.joined(separator: ", ")))
             }
+            if let installed = store.installedModel(spec.id) { spec = ImageModelSpec.spec(for: installed) }
             let coordinator = InferenceCoordinator(engine: MLXEngine())
             if args.count >= 4, let id = ModelRepoID(args[3]), let text = store.installedModel(id) {
                 try await coordinator.load(text.reference)
@@ -261,12 +263,16 @@ nonisolated enum CommandLineTools {
             let steps = Int(env["LAYX_IMAGE_STEPS"] ?? "") ?? spec.defaultSteps
             let cfg = Double(env["LAYX_IMAGE_CFG"] ?? "") ?? spec.defaultCFG
             let prompt = env["LAYX_IMAGE_PROMPT"] ?? "a cozy reading nook with a sleeping cat, warm light, watercolor"
+            print("family \(spec.family.rawValue)")
             print("model \(spec.name) · \(size.label) · \(steps) steps · CFG \(cfg) · free \(String(format: "%.1f", Double(SystemMemory.availableBytes()) / 1e9)) GB")
-            for (label, count) in [("cold (load + 1 image)", 1), ("warm, same seed", 1)] {
+            // LAYX_IMAGE_LORA_SWAP=1: the first image without the LoRA, the second with it (switched on the loaded model).
+            let swap = env["LAYX_IMAGE_LORA_SWAP"] == "1"
+            for (pass, (label, count)) in [("cold (load + 1 image)", 1), (swap ? "LoRA switched on" : "warm, same seed", 1)].enumerated() {
                 let t = Date()
+                let loras = swap && pass == 0 ? [] : choices
                 await MainActor.run {
                     studio.generate(ImageRequest(prompt: prompt, negativePrompt: env["LAYX_IMAGE_NEG"] ?? "", steps: steps, cfg: cfg,
-                                                 seed: 42, count: count, size: size, loras: choices,
+                                                 seed: 42, count: count, size: size, loras: loras,
                                                  source: env["LAYX_IMAGE_SOURCE"].flatMap { try? Data(contentsOf: URL(fileURLWithPath: $0)) },
                                                  strength: Double(env["LAYX_IMAGE_STRENGTH"] ?? "") ?? 0.6), spec: spec)
                 }

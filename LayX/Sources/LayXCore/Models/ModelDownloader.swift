@@ -113,6 +113,52 @@ public actor ModelDownloader {
         for c in observers.values { c.yield(states) }
     }
 
+    /// Picks the files of an image pipeline and its family (checked before anything is downloaded).
+    private func imagePipelineFiles(_ id: ModelRepoID, revision: String, all: [HubFile]) async throws -> ([HubFile], String) {
+        func json(_ path: String) async throws -> [String: Any] {
+            let data = try await hub.smallFile(path, of: id, revision: revision)
+            return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        }
+        guard all.contains(where: { $0.path == "model_index.json" }) else {
+            throw ModelStoreError.incompatible("no model_index.json — Lay X runs image models in diffusers format")
+        }
+        let index = try await json("model_index.json")
+        let className = index["_class_name"] as? String ?? "this pipeline"
+        switch className {
+        case "StableDiffusionXLPipeline":
+            // Exactly the files the SDXL pipeline loads (repositories also hold other formats and precisions).
+            let picked = SDXLFiles.select(from: all)
+            guard let chosen = picked.files else {
+                throw ModelStoreError.incompatible("incomplete SDXL pipeline (missing \(picked.missing.prefix(3).joined(separator: ", ")))")
+            }
+            return (chosen, ImageFamily.sdxl.rawValue)
+        case "Flux2KleinPipeline", "QwenImagePipeline":
+            let picked = DiffusersFiles.select(from: all)
+            guard let chosen = picked.files else {
+                throw ModelStoreError.incompatible("incomplete pipeline (missing \(picked.missing.prefix(3).joined(separator: ", ")))")
+            }
+            let transformer = try await json("transformer/config.json")
+            let int8 = all.contains { $0.path == "transformer/model-int8.safetensors" }
+            if transformer["quantization_config"] != nil, !int8 {
+                throw ModelStoreError.incompatible("pre-quantized weights (bitsandbytes / SDNQ / Nunchaku…) can’t be loaded — choose the bf16 version")
+            }
+            if className == "QwenImagePipeline" {
+                if int8, !all.contains(where: { $0.path == "text_encoder/model-int8.safetensors" }) {
+                    throw ModelStoreError.incompatible("the 8-bit transformer needs text_encoder/model-int8.safetensors")
+                }
+                return (chosen, ImageFamily.qwenImage.rawValue)
+            }
+            let double = transformer["num_layers"] as? Int, single = transformer["num_single_layers"] as? Int
+            guard double == 5, single == 20 else {
+                throw ModelStoreError.incompatible("only FLUX.2 klein 4B is supported (this is a larger klein — 9B models aren’t)")
+            }
+            let distilled = index["is_distilled"] as? Bool ?? false
+            return (chosen, (distilled ? ImageFamily.flux2Klein : .flux2KleinBase).rawValue)
+        default:
+            throw ModelStoreError.incompatible("\(className) isn’t supported — Lay X runs SDXL, FLUX.2 klein 4B and Qwen-Image")
+        }
+    }
+
     // MARK: Work
 
     private func perform(_ id: ModelRepoID, revision: String, profile: DownloadProfile) async throws -> InstalledModel {
@@ -136,19 +182,8 @@ public actor ModelDownloader {
                 throw ModelStoreError.incompatible("architecture “\(type)” is not supported by the MLX engine")
             }
             modelType = type
-        case .sdxl:
-            // Exactly the files the SDXL pipeline loads (repositories also hold other formats and precisions).
-            let picked = SDXLFiles.select(from: all)
-            guard let chosen = picked.files else {
-                throw ModelStoreError.incompatible("not an SDXL pipeline in diffusers format (missing \(picked.missing.prefix(3).joined(separator: ", ")))")
-            }
-            let index = try await hub.smallFile("model_index.json", of: id, revision: revision)
-            let className = (try? JSONSerialization.jsonObject(with: index) as? [String: Any])?["_class_name"] as? String
-            guard className == "StableDiffusionXLPipeline" else {
-                throw ModelStoreError.incompatible("\(className ?? "this pipeline") isn’t supported — Lay X runs SDXL models")
-            }
-            files = chosen
-            modelType = "sdxl"
+        case .imagePipeline:
+            (files, modelType) = try await imagePipelineFiles(id, revision: revision, all: all)
         }
         try Task.checkCancellation()
 
@@ -293,8 +328,9 @@ final class ProgressMeter: Sendable {
 public enum DownloadProfile: Sendable, Hashable {
     /// MLX language model: weights + configs + tokenizer, architecture checked against the engine.
     case languageModel
-    /// SDXL image pipeline (diffusers layout): configs, tokenizers and the fp16 weights when available.
-    case sdxl
+    /// Image pipeline in diffusers layout (SDXL, FLUX.2 klein 4B, Qwen-Image): the family is read from
+    /// `model_index.json` and recorded as the model type.
+    case imagePipeline
 
-    var kind: ModelKind { self == .sdxl ? .image : .language }
+    var kind: ModelKind { self == .imagePipeline ? .image : .language }
 }
