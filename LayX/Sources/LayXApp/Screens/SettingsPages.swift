@@ -232,6 +232,7 @@ struct APISettings: View {
 struct AdvancedSettings: View {
     let screen: SettingsScreen
     @State private var confirmReset = false
+    @State private var kvBytes: Int64 = 0
     @State private var message: String?
     @Environment(InferenceStatusModel.self) private var inference
 
@@ -244,6 +245,15 @@ struct AdvancedSettings: View {
                 screen.row("Clear MLX buffer cache", inference.engineMemory.map { String(format: "%.2f GB cached", Double($0.cacheBytes) / 1_073_741_824) } ?? "—") {
                     LXButton(title: "Clear") { Task { await AppServices.shared.coordinator.clearCache() } }
                 }
+                screen.row("Conversation caches", String(format: "%.0f MB of reusable KV caches (memory only)", Double(kvBytes) / 1_048_576)) {
+                    LXButton(title: "Discard") {
+                        Task {
+                            await AppServices.shared.coordinator.discardCaches(key: nil)
+                            kvBytes = await AppServices.shared.coordinator.cacheBytes()
+                        }
+                    }
+                }
+                .task { kvBytes = await AppServices.shared.coordinator.cacheBytes() }
             }
             screen.group("Downloads") {
                 let partial = AppServices.shared.models.incomplete

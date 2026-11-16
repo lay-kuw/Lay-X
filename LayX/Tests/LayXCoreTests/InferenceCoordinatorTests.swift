@@ -165,6 +165,55 @@ import Testing
         #expect(empty.decodeTokensPerSecond == nil)
     }
 
+    @Test func chatPreemptsWorkAndWorkResumes() async throws {
+        let engine = ScriptedEngine(tokens: Array(repeating: "x", count: 40), tokenDelay: .milliseconds(3))
+        let c = InferenceCoordinator(engine: engine)
+        try await c.load(ref)
+        let work = Task { try await collect(c.generate(request(.work))) }
+        try await Task.sleep(for: .milliseconds(30))
+        await engine.setTokens(["a", "b", "c"])
+        let chatText = try await collect(c.generate(request(.chat))).0
+        #expect(chatText == "abc")
+        let (workText, _) = try await work.value
+        #expect(workText.count == 40, "work finishes after resuming")
+        // While chat was generating, work produced no tokens: the chat tokens are contiguous in the log.
+        let log = await engine.emissionLog
+        let first = try #require(log.firstIndex(of: .chat)), last = try #require(log.lastIndex(of: .chat))
+        #expect(log[first...last].allSatisfy { $0 == .chat })
+        #expect(log.first == .work && log.last == .work)
+        #expect(await c.snapshot.pausedClient == nil)
+    }
+
+    @Test func workDoesNotPreemptChatAndBenchmarkIsNotPreempted() async throws {
+        let engine = ScriptedEngine(tokens: Array(repeating: "y", count: 15), tokenDelay: .milliseconds(3))
+        let c = InferenceCoordinator(engine: engine)
+        try await c.load(ref)
+        let bench = Task { try await collect(c.generate(request(.benchmark))) }
+        try await Task.sleep(for: .milliseconds(15))
+        let chat = Task { try await collect(c.generate(request(.chat))) }
+        _ = try await bench.value
+        _ = try await chat.value
+        let log = await engine.emissionLog
+        // FIFO: benchmark tokens all come before chat tokens.
+        #expect(log.lastIndex(of: .benchmark)! < log.firstIndex(of: .chat)!)
+    }
+
+    @Test func pausedSnapshotIsReported() async throws {
+        let engine = ScriptedEngine(tokens: Array(repeating: "x", count: 60), tokenDelay: .milliseconds(3))
+        let c = InferenceCoordinator(engine: engine)
+        try await c.load(ref)
+        let work = Task { try await collect(c.generate(request(.work))) }
+        try await Task.sleep(for: .milliseconds(20))
+        await engine.setTokens(Array(repeating: "c", count: 20))
+        let chat = Task { try await collect(c.generate(request(.chat))) }
+        try await Task.sleep(for: .milliseconds(20))
+        let snap = await c.snapshot
+        #expect(snap.pausedClient == .work)
+        #expect(snap.activeClient == .chat)
+        _ = try await chat.value
+        _ = try await work.value
+    }
+
     @Test func engineSettingsBudgetAndValidation() {
         let gb: Int64 = 1 << 30
         #expect(EngineSettings().weightBudget(physicalMemory: 64 * gb) == 48 * gb)

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// A model on disk that an engine can load.
 public struct ModelReference: Sendable, Hashable, Codable {
@@ -54,6 +55,26 @@ public struct PromptMessage: Sendable, Hashable, Codable {
 /// together with content.
 public enum InferenceClient: String, Sendable, Hashable, Codable {
     case chat, miniChat, work, benchmark, api
+
+    /// Someone is waiting on the reply (Chat, Mini Chat, API clients).
+    public var isInteractive: Bool { self == .chat || self == .miniChat || self == .api }
+    /// Long background generation that may be paused at a token boundary so an interactive reply can run.
+    public var isPreemptible: Bool { self == .work }
+}
+
+/// Cooperative pause switch for a running generation. Engines check it between tokens
+/// (`waitWhilePaused()`), so a paused generation holds its state but uses no GPU time.
+public final class PauseGate: Sendable {
+    private let paused = Mutex(false)
+    public init() {}
+    public var isPaused: Bool { paused.withLock { $0 } }
+    public func pause() { paused.withLock { $0 = true } }
+    public func resume() { paused.withLock { $0 = false } }
+
+    /// Blocks the calling (generation) thread while paused. Returns early if the task is cancelled.
+    public func waitWhilePaused() {
+        while isPaused && !Task.isCancelled { Thread.sleep(forTimeInterval: 0.01) }
+    }
 }
 
 public struct GenerationRequest: Sendable {
@@ -63,12 +84,18 @@ public struct GenerationRequest: Sendable {
     /// Reasoning ("thinking") mode for models whose chat template supports `enable_thinking`
     /// (e.g. Qwen3). `nil` = the model's default. Ignored by templates without the flag.
     public var thinking: Bool?
+    /// Groups requests whose KV cache may be reused (e.g. a chat session id). nil = prefix matching only.
+    public var cacheKey: String?
+    /// Set by the coordinator for preemptible requests.
+    public var pauseGate: PauseGate?
 
-    public init(messages: [PromptMessage], parameters: GenerationParameters, client: InferenceClient, thinking: Bool? = nil) {
+    public init(messages: [PromptMessage], parameters: GenerationParameters, client: InferenceClient, thinking: Bool? = nil,
+                cacheKey: String? = nil) {
         self.messages = messages
         self.parameters = parameters
         self.client = client
         self.thinking = thinking
+        self.cacheKey = cacheKey
     }
 }
 
@@ -141,6 +168,10 @@ public protocol InferenceEngine: Sendable {
     func configure(_ settings: EngineSettings) async
     /// Releases cached buffers that aren't in use. Default: no-op.
     func clearCache() async
+    /// Drops reusable KV caches for `key` (nil = all). Default: no-op.
+    func discardCaches(key: String?) async
+    /// Bytes held by reusable KV caches. Default: 0.
+    func cacheBytes() async -> Int64
 }
 
 /// Engine-level settings from Settings → Models & Inference.
@@ -152,11 +183,18 @@ public struct EngineSettings: Sendable, Hashable, Codable {
     /// Upper bound for the share of time the GPU spends generating (0.3–1.0). Below 1, the engine pauses
     /// between tokens in proportion to the time each token took, leaving GPU time for the UI and other apps.
     public var gpuLimit: Double
+    /// Memory for reusable KV caches (conversation + prefix caches). 0 disables caching.
+    public var cacheBudgetBytes: Int64
+    /// Run a tiny generation right after loading so the first real reply doesn't pay kernel compilation.
+    public var warmUp: Bool
 
-    public init(memoryLimitBytes: Int64? = nil, kvBits: Int? = nil, gpuLimit: Double = 1) {
+    public init(memoryLimitBytes: Int64? = nil, kvBits: Int? = nil, gpuLimit: Double = 1,
+                cacheBudgetBytes: Int64 = 2 << 30, warmUp: Bool = true) {
         self.memoryLimitBytes = memoryLimitBytes
         self.kvBits = kvBits.flatMap { [4, 8].contains($0) ? $0 : nil }
         self.gpuLimit = min(max(gpuLimit, 0.3), 1)
+        self.cacheBudgetBytes = max(cacheBudgetBytes, 0)
+        self.warmUp = warmUp
     }
 
     /// Pause to insert after each token, given the unthrottled per-token time `tokenTime` (seconds).
@@ -182,4 +220,6 @@ extension InferenceEngine {
     public func resetPeakMemory() async {}
     public func configure(_ settings: EngineSettings) async {}
     public func clearCache() async {}
+    public func discardCaches(key: String?) async {}
+    public func cacheBytes() async -> Int64 { 0 }
 }

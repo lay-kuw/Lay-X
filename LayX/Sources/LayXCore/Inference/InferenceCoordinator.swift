@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// The single owner of the model runtime. Chat, Mini Chat, Work, Benchmark and the API server all go
 /// through one coordinator, which:
@@ -24,13 +25,16 @@ public actor InferenceCoordinator {
         public var activeClient: InferenceClient?
         public var queuedCount: Int
         public var lastMetrics: GenerationMetrics?
+        /// A preemptible generation paused so an interactive reply can run.
+        public var pausedClient: InferenceClient?
 
         public init(model: ModelState = .none, activeClient: InferenceClient? = nil, queuedCount: Int = 0,
-                    lastMetrics: GenerationMetrics? = nil) {
+                    lastMetrics: GenerationMetrics? = nil, pausedClient: InferenceClient? = nil) {
             self.model = model
             self.activeClient = activeClient
             self.queuedCount = queuedCount
             self.lastMetrics = lastMetrics
+            self.pausedClient = pausedClient
         }
     }
 
@@ -39,11 +43,16 @@ public actor InferenceCoordinator {
 
     private var model: ModelState = .none
     private var lastMetrics: GenerationMetrics?
-    private var activeClient: InferenceClient?
 
-    // FIFO gate
+    // FIFO gate (one primary owner at a time) + one interactive "overlay" that may run while a preemptible
+    // primary generation is paused.
+    private enum Owner { case lifecycle, generation(UUID, InferenceClient, PauseGate?) }
+    private enum Slot { case primary, overlay }
     private var gateBusy = false
-    private var waiters: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
+    private var owner: Owner?
+    private var waiters: [(id: UUID, owner: Owner, continuation: CheckedContinuation<Void, Error>)] = []
+    private var overlay: (id: UUID, client: InferenceClient)?
+    private var overlayWaiters: [(id: UUID, client: InferenceClient, continuation: CheckedContinuation<Void, Error>)] = []
     /// Running generation tasks, so lifecycle changes can cancel them.
     private var generationTasks: [UUID: Task<Void, Never>] = [:]
     /// Generations cancelled by `load` / `unload` (reported as `.lifecycleChanged`, not user cancellation).
@@ -59,7 +68,13 @@ public actor InferenceCoordinator {
     // MARK: Observation
 
     public var snapshot: Snapshot {
-        Snapshot(model: model, activeClient: activeClient, queuedCount: waiters.count, lastMetrics: lastMetrics)
+        var primary: InferenceClient?
+        var paused: InferenceClient?
+        if case .generation(_, let client, let gate)? = owner {
+            if gate?.isPaused == true { paused = client } else { primary = client }
+        }
+        return Snapshot(model: model, activeClient: overlay?.client ?? primary, queuedCount: waiters.count + overlayWaiters.count,
+                        lastMetrics: lastMetrics, pausedClient: paused)
     }
 
     /// A stream that yields the current snapshot immediately and then every change.
@@ -88,7 +103,7 @@ public actor InferenceCoordinator {
     public func load(_ reference: ModelReference) async throws -> LoadedModelInfo {
         cancelAllGenerations()
         let ticket = UUID()
-        try await acquire(ticket, bypassLimit: true)
+        try await acquire(ticket, as: .lifecycle, bypassLimit: true)
         defer { release() }
 
         if model.loadedModel != nil { await engine.unload() }
@@ -122,16 +137,17 @@ public actor InferenceCoordinator {
     public func unload() async {
         cancelAllGenerations()
         let ticket = UUID()
-        do { try await acquire(ticket, bypassLimit: true) } catch { return }
+        do { try await acquire(ticket, as: .lifecycle, bypassLimit: true) } catch { return }
         defer { release() }
         if model.loadedModel != nil || model != .none { await engine.unload() }
         model = .none
         publish()
     }
 
-    /// Called on system memory pressure: frees the model only when nothing is generating.
+    /// Called on system memory pressure: frees the model only when nothing is generating. (Callers should
+    /// drop KV caches first with `discardCaches(key: nil)`.)
     public func handleMemoryPressure() async -> Bool {
-        guard !gateBusy, model.loadedModel != nil else { return false }
+        guard !gateBusy, overlay == nil, model.loadedModel != nil else { return false }
         await unload()
         return true
     }
@@ -145,12 +161,15 @@ public actor InferenceCoordinator {
     /// Applies engine settings between generations (through the gate, so never mid-generation).
     public func configure(_ settings: EngineSettings) async {
         let ticket = UUID()
-        do { try await acquire(ticket, bypassLimit: true) } catch { return }
+        do { try await acquire(ticket, as: .lifecycle, bypassLimit: true) } catch { return }
         defer { release() }
         await engine.configure(settings)
     }
 
     public nonisolated func clearCache() async { await engine.clearCache() }
+    /// Drops reusable KV caches for a conversation (nil = all), e.g. when a chat is deleted.
+    public nonisolated func discardCaches(key: String?) async { await engine.discardCaches(key: key) }
+    public nonisolated func cacheBytes() async -> Int64 { await engine.cacheBytes() }
 
     // MARK: Generation
 
@@ -180,25 +199,23 @@ public actor InferenceCoordinator {
 
     private func run(id: UUID, request: GenerationRequest,
                      into continuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation) async {
+        var req = request
+        req.parameters = request.parameters.validated()
+        req.pauseGate = request.client.isPreemptible ? PauseGate() : nil
+        let slot: Slot
         do {
-            try await acquire(id, bypassLimit: false)
+            slot = try await acquireGeneration(id, client: request.client, gate: req.pauseGate)
         } catch {
             continuation.finish(throwing: error)
             return
         }
-        defer {
-            activeClient = nil
-            release()
-        }
+        defer { releaseGeneration(slot) }
         guard model.loadedModel != nil else {
             continuation.finish(throwing: InferenceError.noModelLoaded)
             return
         }
-        activeClient = request.client
         publish()
 
-        var req = request
-        req.parameters = request.parameters.validated()
         do {
             var finished = false
             for try await event in engine.generate(req) {
@@ -229,21 +246,62 @@ public actor InferenceCoordinator {
         }
     }
 
-    // MARK: FIFO gate
+    // MARK: Gate
 
-    private func acquire(_ id: UUID, bypassLimit: Bool) async throws {
+    /// Lifecycle operations take the primary gate (FIFO).
+    private func acquire(_ id: UUID, as role: Owner, bypassLimit: Bool) async throws {
         try Task.checkCancellation()
         if !gateBusy {
             gateBusy = true
+            owner = role
             return
         }
         if !bypassLimit, waiters.count >= maxQueued { throw InferenceError.queueFull }
+        try await wait(id, as: role)
+    }
+
+    /// Generations take the primary gate, except an interactive request that arrives while a preemptible
+    /// generation holds it: that generation is paused and the request runs as the overlay.
+    private func acquireGeneration(_ id: UUID, client: InferenceClient, gate: PauseGate?) async throws -> Slot {
+        try Task.checkCancellation()
+        let role = Owner.generation(id, client, gate)
+        if !gateBusy {
+            gateBusy = true
+            owner = role
+            return .primary
+        }
+        if client.isInteractive, case .generation(_, let ownerClient, let ownerGate)? = owner, ownerClient.isPreemptible {
+            if overlay == nil {
+                overlay = (id, client)
+                ownerGate?.pause()
+                publish()
+                return .overlay
+            }
+            guard overlayWaiters.count < maxQueued else { throw InferenceError.queueFull }
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                    if Task.isCancelled { c.resume(throwing: CancellationError()) } else {
+                        overlayWaiters.append((id, client, c))
+                        publish()
+                    }
+                }
+            } onCancel: {
+                Task { await self.cancelWaiter(id) }
+            }
+            return .overlay
+        }
+        guard waiters.count < maxQueued else { throw InferenceError.queueFull }
+        try await wait(id, as: role)
+        return .primary
+    }
+
+    private func wait(_ id: UUID, as role: Owner) async throws {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
                 if Task.isCancelled {
                     c.resume(throwing: CancellationError())
                 } else {
-                    waiters.append((id, c))
+                    waiters.append((id, role, c))
                     publish()
                 }
             }
@@ -253,17 +311,44 @@ public actor InferenceCoordinator {
     }
 
     private func cancelWaiter(_ id: UUID) {
-        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
-        waiters.remove(at: index).continuation.resume(throwing: CancellationError())
+        if let index = waiters.firstIndex(where: { $0.id == id }) {
+            waiters.remove(at: index).continuation.resume(throwing: CancellationError())
+        } else if let index = overlayWaiters.firstIndex(where: { $0.id == id }) {
+            overlayWaiters.remove(at: index).continuation.resume(throwing: CancellationError())
+        }
         publish()
+    }
+
+    private func releaseGeneration(_ slot: Slot) {
+        switch slot {
+        case .primary: release()
+        case .overlay:
+            if !overlayWaiters.isEmpty, case .generation(_, let c, _)? = owner, c.isPreemptible {
+                let next = overlayWaiters.removeFirst()
+                overlay = (next.id, next.client)
+                next.continuation.resume()
+            } else {
+                // Hand any queued interactive requests to the normal queue and resume the paused generation.
+                overlay = nil
+                for w in overlayWaiters { waiters.insert((w.id, .generation(w.id, w.client, nil), w.continuation), at: 0) }
+                overlayWaiters.removeAll()
+                if case .generation(_, _, let gate)? = owner { gate?.resume() }
+            }
+            publish()
+        }
     }
 
     private func release() {
         if waiters.isEmpty {
             gateBusy = false
+            owner = nil
         } else {
             // Ownership passes directly to the next waiter; gateBusy stays true.
-            waiters.removeFirst().continuation.resume()
+            let next = waiters.removeFirst()
+            owner = next.owner
+            // An interactive overlay may still be running; a newly started preemptible owner starts paused.
+            if overlay != nil, case .generation(_, let c, let gate) = next.owner, c.isPreemptible { gate?.pause() }
+            next.continuation.resume()
         }
         publish()
     }

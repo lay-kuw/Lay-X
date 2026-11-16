@@ -475,9 +475,9 @@ struct SendButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: mode == .send ? "arrow.up" : "stop.fill")
-                .font(.system(size: mode == .send ? 13 : 10, weight: .bold))
+                .font(.system(size: mode == .send ? 10.5 : 7.5, weight: .bold))
                 .foregroundStyle(enabled ? LX.C.onGlass : LX.C.tertiary)
-                .frame(width: 28, height: 28)
+                .frame(width: 22, height: 22)
                 .modifier(SendBackground(enabled: enabled, hover: hover))
         }
         .buttonStyle(PressScaleStyle())
@@ -493,9 +493,9 @@ private struct SendBackground: ViewModifier {
     let hover: Bool
     func body(content: Content) -> some View {
         if enabled {
-            content.accentGlass(radius: 8, strength: hover ? 1.25 : 1)
+            content.accentGlass(radius: LX.R.sm, strength: hover ? 1.25 : 1)
         } else {
-            content.background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.06)))
+            content.background(RoundedRectangle(cornerRadius: LX.R.sm, style: .continuous).fill(Color.white.opacity(0.06)))
         }
     }
 }
@@ -604,8 +604,19 @@ struct LXField: View {
                 .font(mono ? LX.F.mono(12.5) : LX.F.ui(12.5))
                 .foregroundStyle(LX.C.primary)
                 .focused($focused)
+                .onExitCommand { focused = false }
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 12)).foregroundStyle(LX.C.tertiary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Clear")
+                .transition(.opacity)
+            }
         }
-        .padding(.horizontal, 10)
+        .animation(LX.M.hover, value: text.isEmpty)
+        .padding(.leading, 10).padding(.trailing, text.isEmpty ? 10 : 7)
         .frame(height: LX.S.control)
         .well(radius: LX.R.md, fill: Color.black.opacity(0.28))
         .overlay(RoundedRectangle(cornerRadius: LX.R.md).strokeBorder(LX.C.accent.opacity(focused ? 0.7 : 0), lineWidth: 2))

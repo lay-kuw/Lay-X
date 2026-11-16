@@ -17,6 +17,8 @@ public struct GenerationMetrics: Sendable, Codable, Hashable {
     /// Request accepted → finished (excludes queue wait and model loading).
     public var totalDuration: Duration
     public var stopReason: StopReason
+    /// Prompt tokens served from a reused KV cache (not prefilled). nil/0 = full prefill.
+    public var cachedPromptTokens: Int?
 
     public enum StopReason: String, Sendable, Codable, Hashable {
         case endOfSequence, maxTokens, cancelled, contextLimit, error

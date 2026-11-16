@@ -149,6 +149,9 @@ public final class ChatSessionStore {
         omittedMessages[id] = nil
         let wasPinned = session(id)?.isPinned ?? false
         sessions.removeAll { $0.id == id }
+        // Safe disposal: the conversation's KV cache is derived from its content.
+        let coordinator = self.coordinator
+        Task { await coordinator.discardCaches(key: id.uuidString) }
         if wasPinned { enqueueWrite { repo in try await repo.delete(id: id) } }
     }
 
@@ -232,7 +235,8 @@ public final class ChatSessionStore {
         sessions[i].messages.append(reply)
         let messageID = sessions[i].messages[sessions[i].messages.count - 1].id
 
-        let request = GenerationRequest(messages: prompt.messages, parameters: config.parameters, client: .chat, thinking: config.thinking)
+        let request = GenerationRequest(messages: prompt.messages, parameters: config.parameters, client: .chat, thinking: config.thinking,
+                                        cacheKey: id.uuidString)
         let clock = ContinuousClock()
         var buffer = ""
         var lastFlush = clock.now

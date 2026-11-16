@@ -145,6 +145,15 @@ final class AppServices {
             MainActor.assumeIsolated { AppServices.shared.applyEngineSettings() }
         }
         startIdleUnload()
+        // "Keep the model ready": load the default chat model at launch (with warm-up).
+        if EnginePreferences.preloadModel {
+            Task {
+                try? await Task.sleep(for: .milliseconds(300))   // let the store scan finish
+                guard await coordinator.snapshot.model.loadedModel == nil,
+                      let model = AppServices.defaultChatModel(in: library) else { return }
+                _ = try? await coordinator.load(model.reference)
+            }
+        }
     }
 
     /// Pushes Settings → Models & Inference engine values to the engine when they change.
@@ -184,11 +193,14 @@ final class AppServices {
 
     /// On critical memory pressure the model is unloaded if nothing is generating (it reloads on demand).
     private func startMemoryPressureMonitor() {
-        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.critical], queue: .main)
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
         let coordinator = self.coordinator
-        source.setEventHandler {
+        source.setEventHandler { [weak source] in
+            let critical = source?.data.contains(.critical) ?? false
             Task {
-                if await coordinator.handleMemoryPressure() {
+                // Reusable KV caches go first; the model itself only under critical pressure, and only when idle.
+                await coordinator.discardCaches(key: nil)
+                if critical, await coordinator.handleMemoryPressure() {
                     Log.inference.notice("Unloaded model after critical memory pressure")
                 }
             }

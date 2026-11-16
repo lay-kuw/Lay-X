@@ -14,6 +14,9 @@ actor ScriptedEngine: InferenceEngine {
     private(set) var completedGenerations = 0
     private(set) var requests: [GenerationRequest] = []
     func record(_ r: GenerationRequest) { requests.append(r) }
+    /// Order in which tokens were produced, by client (to prove preemption).
+    private(set) var emissionLog: [InferenceClient] = []
+    func emitted(_ c: InferenceClient) { emissionLog.append(c) }
 
     init(tokens: [String] = ["Hel", "lo", "!"], tokenDelay: Duration = .milliseconds(5),
          loadDelay: Duration = .milliseconds(5)) {
@@ -46,7 +49,9 @@ actor ScriptedEngine: InferenceEngine {
                 var count = 0
                 do {
                     for t in await self.tokens {
+                        while request.pauseGate?.isPaused == true { try await Task.sleep(for: .milliseconds(2)) }
                         try await Task.sleep(for: await self.tokenDelay)
+                        await self.emitted(request.client)
                         continuation.yield(.text(t))
                         count += 1
                     }

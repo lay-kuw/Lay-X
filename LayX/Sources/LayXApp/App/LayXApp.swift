@@ -64,6 +64,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         GlobalHotKey.shared.start { MiniChatController.shared.toggle() }
+        installFocusResigner()
+    }
+
+    /// Clicking anywhere outside the text field that is being edited ends editing (macOS otherwise keeps the
+    /// field active until another field takes focus).
+    private func installFocusResigner() {
+        NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
+            guard let window = event.window,
+                  let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
+                  let field = editor.delegate as? NSView else { return event }
+            let point = field.convert(event.locationInWindow, from: nil)
+            if !field.bounds.contains(point) { window.makeFirstResponder(nil) }
+            return event
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

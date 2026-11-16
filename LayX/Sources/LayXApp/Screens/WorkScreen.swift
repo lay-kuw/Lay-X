@@ -53,6 +53,7 @@ struct WorkProjectView: View {
     @State private var request = ""
     @State private var preview: TextFile?
     @State private var mentionIndex = 0
+    @FocusState private var inputFocused: Bool
     @State private var mentionDismissedFor: String?
 
     /// `@` completion candidates for the token being typed (empty when not typing a mention).
@@ -365,9 +366,10 @@ struct WorkProjectView: View {
             Spacer(minLength: 0)
 
             if !mentionSuggestions.isEmpty { mentionList }
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 0) {
                 TextField(changes.isEmpty ? "Describe a change… (@ to add files)" : "Refine the proposal…", text: $request, axis: .vertical)
                     .textFieldStyle(.plain).font(LX.F.body).lineLimit(1...6)
+                    .focused($inputFocused)
                     .onKeyPress(.return, phases: .down) { press in
                         let s = mentionSuggestions
                         if !s.isEmpty, !press.modifiers.contains(.shift) {
@@ -403,16 +405,30 @@ struct WorkProjectView: View {
                     }
                     .onChange(of: request) { mentionIndex = 0 }
                     .onSubmit { submit() }
-                HStack {
+                    .padding(.horizontal, 12).padding(.top, 11).padding(.bottom, 7)
+                HStack(spacing: 6) {
                     Text("@ adds files or folders").font(LX.F.monoSmall).foregroundStyle(LX.C.tertiary)
                     Spacer()
                     if busy {
-                        LXButton(title: "Stop") { session.cancel() }.keyboardShortcut(.escape, modifiers: [])
+                        SendButton(mode: .stop) { session.cancel() }.keyboardShortcut(.escape, modifiers: [])
+                    } else {
+                        SendButton(mode: .send, enabled: !request.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { submit() }
                     }
                 }
+                .padding(.leading, 12).padding(.trailing, 7).frame(height: 34)
             }
-            .padding(.horizontal, 12).padding(.top, 11).padding(.bottom, 6)
-            .well(radius: LX.R.lg, fill: Color(hex: 0x080910, alpha: 0.6))
+            .background {
+                ZStack {
+                    RoundedRectangle(cornerRadius: LX.R.xl).fill(.ultraThinMaterial)
+                    RoundedRectangle(cornerRadius: LX.R.xl).fill(Color(hex: 0x080910, alpha: 0.6))
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: LX.R.xl))
+            .overlay(RoundedRectangle(cornerRadius: LX.R.xl).strokeBorder(Color.white.opacity(inputFocused ? 0.16 : 0.09), lineWidth: 1))
+            .overlay { if busy { GlowingBorder(radius: LX.R.xl).transition(.opacity) } }
+            .shadow(color: .black.opacity(0.3), radius: 16, y: 10)
+            .animation(LX.M.hover, value: inputFocused)
+            .animation(.easeInOut(duration: 0.3), value: busy)
             .padding(10)
         }
     }

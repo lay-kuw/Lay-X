@@ -49,6 +49,9 @@ struct SettingsScreen: View {
     @AppStorage(EnginePreferences.memoryLimitKey) private var memoryLimitGB = 0.0
     @AppStorage(EnginePreferences.kvBitsKey) private var kvBits = 0
     @AppStorage(EnginePreferences.gpuLimitKey) private var gpuLimit = 1.0
+    @AppStorage(EnginePreferences.cacheBudgetKey) private var cacheBudgetGB = EnginePreferences.defaultCacheBudgetGB
+    @AppStorage(EnginePreferences.warmUpKey) private var warmUp = true
+    @AppStorage(EnginePreferences.preloadKey) private var preload = true
     @AppStorage(WorkProjects.defaultWorkModelKey) private var defaultWorkID = ""
     @AppStorage(ChatPreferences.temperatureKey) private var temperature = ChatPreferences.defaultTemperature
     @AppStorage(ChatPreferences.topPKey) private var topP = ChatPreferences.defaultTopP
@@ -199,6 +202,17 @@ struct SettingsScreen: View {
                         }
                         row("KV cache quantization", "8-bit halves cache size with negligible quality loss") {
                             Segmented(options: [(0, "Off"), (8, "8-bit"), (4, "4-bit")], selection: $kvBits, mono: true)
+                        }
+                    }
+                    group("Speed") {
+                        row("Load model at launch", "Loads the default chat model when Lay X starts, so the first message doesn't wait") {
+                            Toggle("", isOn: $preload).toggleStyle(LXToggleStyle()).labelsHidden().fixedSize()
+                        }
+                        row("Warm up after loading", "Runs a tiny generation right after loading to compile GPU kernels (faster first reply)") {
+                            Toggle("", isOn: $warmUp).toggleStyle(LXToggleStyle()).labelsHidden().fixedSize()
+                        }
+                        row("Conversation cache", "Keeps each chat's processed context (KV cache) and shared prefixes like your Soul, so follow-ups start almost instantly. Memory only — never written to disk; cleared when a chat is deleted, the model changes, or memory runs low") {
+                            GradientSlider(value: $cacheBudgetGB, range: 0...16) { $0 < 0.5 ? "Off" : "\(Int($0.rounded())) GB" }
                         }
                     }
                     group("Sampling defaults") {

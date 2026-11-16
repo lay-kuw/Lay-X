@@ -18,7 +18,7 @@ nonisolated enum CommandLineTools {
         case "--mlx-selftest":
             print("mlx-selftest: \(MLXSelfTest.run())")
             exit(0)
-        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check":
+        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check":
             Task.detached {
                 do {
                     try await run(args)
@@ -35,7 +35,7 @@ nonisolated enum CommandLineTools {
     }
 
     /// Commands handled headlessly; anything else starts the GUI.
-    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check"]
+    static let commands: Set<String> = ["--mlx-selftest", "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check"]
 
     private static func run(_ args: [String]) async throws {
         let store = ModelStore(root: try ModelStore.defaultRoot())
@@ -200,6 +200,11 @@ nonisolated enum CommandLineTools {
             guard args.count >= 5, let id = ModelRepoID(args[2]), let model = store.installedModel(id),
                   let mode = WebSearchMode(rawValue: args[3]) else { throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "") }
             try await WebCheck.run(model: model, mode: mode, question: args[4])
+        case "--cache-check":
+            guard args.count >= 3, let id = ModelRepoID(args[2]), let model = store.installedModel(id) else {
+                throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "")
+            }
+            try await CacheCheck.run(model: model)
         case "--search":
             let support = MLXArchitectureSupport()
             for r in try await HubAPI().search(args.count >= 3 ? args[2] : "", limit: 12) {
@@ -406,5 +411,52 @@ enum WebCheck {
         print("requests: \(reply?.sources.isEmpty == false ? "searched" : "no search")")
         for (i, s) in (reply?.sources ?? []).enumerated() { print("[\(i + 1)] \(s.host) — \(s.title.prefix(70))") }
         print("--- reply ---\n\(ThinkingParser.stripThinking(reply?.content ?? "").prefix(900))")
+    }
+}
+
+/// Real-MLX check of KV-cache reuse and Work preemption.
+@MainActor
+enum CacheCheck {
+    static func run(model: InstalledModel) async throws {
+        let coordinator = InferenceCoordinator(engine: MLXEngine())
+        try await coordinator.load(model.reference)
+        let soul = "You are a helpful assistant. " + String(repeating: "Always answer carefully, clearly and concisely. ", count: 40)
+        func ask(_ history: [PromptMessage], key: String, client: InferenceClient = .chat, maxTokens: Int = 60) async throws -> (String, GenerationMetrics) {
+            let req = GenerationRequest(messages: [PromptMessage(role: .system, content: soul)] + history,
+                                        parameters: GenerationParameters(temperature: 0, maxTokens: maxTokens, seed: 0),
+                                        client: client, thinking: false, cacheKey: key)
+            var text = "", metrics: GenerationMetrics?
+            for try await e in coordinator.generate(req) {
+                switch e { case .text(let t): text += t; case .finished(let m): metrics = m }
+            }
+            return (text, metrics!)
+        }
+        func line(_ label: String, _ m: GenerationMetrics) {
+            print(String(format: "%@: prompt %d prefilled + %d cached, TTFT %.0f ms", label, m.promptTokens, m.cachedPromptTokens ?? 0, m.timeToFirstToken.milliseconds))
+        }
+        var h: [PromptMessage] = [PromptMessage(role: .user, content: "Name three rivers in Japan.")]
+        let (a1, m1) = try await ask(h, key: "s1"); line("turn 1 (cold)", m1)
+        h += [PromptMessage(role: .assistant, content: a1), PromptMessage(role: .user, content: "Which is the longest?")]
+        let (a2, m2) = try await ask(h, key: "s1"); line("turn 2 (same chat)", m2)
+        h += [PromptMessage(role: .assistant, content: a2), PromptMessage(role: .user, content: "How long is it in km?")]
+        let (_, m3) = try await ask(h, key: "s1"); line("turn 3 (same chat)", m3)
+        let (_, m4) = try await ask([PromptMessage(role: .user, content: "Say hello.")], key: "s2"); line("new chat, same Soul (prefix)", m4)
+        print(String(format: "cache memory: %.1f MB", Double(await coordinator.cacheBytes()) / 1_048_576))
+        await coordinator.discardCaches(key: "s1")
+        let (_, m5) = try await ask(h, key: "s1"); line("turn 3 again after deleting chat s1", m5)
+        print(String(format: "cache memory: %.1f MB", Double(await coordinator.cacheBytes()) / 1_048_576))
+        await coordinator.discardCaches(key: nil)
+        print(String(format: "after discarding all: %.1f MB", Double(await coordinator.cacheBytes()) / 1_048_576))
+
+        // Work preemption: a long Work generation, then a chat question.
+        let clock = ContinuousClock()
+        let workStart = clock.now
+        let work = Task { try await ask([PromptMessage(role: .user, content: "Write a 400-word essay about lighthouses.")], key: "w", client: .work, maxTokens: 500) }
+        try await Task.sleep(for: .milliseconds(800))
+        let chatStart = clock.now
+        let (_, mc) = try await ask([PromptMessage(role: .user, content: "What is 2+2? Answer with one number.")], key: "c", maxTokens: 10)
+        print(String(format: "chat during work: answered in %.2f s (TTFT %.0f ms)", (clock.now - chatStart).seconds, mc.timeToFirstToken.milliseconds))
+        let (_, mw) = try await work.value
+        print(String(format: "work finished: %d tokens in %.1f s", mw.generatedTokens, (clock.now - workStart).seconds))
     }
 }
