@@ -5,7 +5,7 @@ import Testing
 @Suite struct SQLiteDatabaseTests {
     @Test func migrationsSetUserVersionAndCreateTables() async throws {
         let db = try SQLiteDatabase(location: .inMemory, migrations: LayXSchema.migrations)
-        #expect(try await db.userVersion() == 5)
+        #expect(try await db.userVersion() == 6)
         let tables = try await db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
             .compactMap { $0["name"].text }
         #expect(tables == ["api_key", "app_meta", "benchmark_run", "image_generation", "pinned_chat", "pinned_message"])

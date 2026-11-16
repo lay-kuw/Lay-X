@@ -40,11 +40,13 @@ struct ImageScreen: View {
         }
         .overlay(alignment: .topLeading) {
             if pickerOpen {
-                Color.black.opacity(0.001).ignoresSafeArea()
-                    .onTapGesture { withAnimation(LX.M.mini) { pickerOpen = false } }
-                ImageModelPanel(open: $pickerOpen, selected: spec)
-                    .padding(.leading, 14).padding(.top, 50)
-                    .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topLeading)))
+                // Same placement as Chat's panel: under the header, aligned with the picker.
+                ZStack(alignment: .topLeading) {
+                    Color.black.opacity(0.001).onTapGesture { withAnimation(LX.M.mini) { pickerOpen = false } }
+                    ImageModelPanel(open: $pickerOpen, selected: spec)
+                        .padding(.top, LX.S.header + 2).padding(.leading, 12)
+                        .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topLeading)))
+                }
             }
         }
         .overlay(alignment: .bottom) {
@@ -81,11 +83,8 @@ struct ImageModelPicker: View {
                     }
                 }
                 .frame(width: 14, height: 14)
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    Text(spec?.name ?? "No image model").font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary)
-                    Text(subtitle).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
-                }
-                .lineLimit(1).fixedSize()
+                Text(spec?.name ?? "No image model").font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary)
+                    .lineLimit(1).fixedSize()
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(LX.C.tertiary)
                     .rotationEffect(.degrees(open ? 180 : 0))
             }
@@ -98,18 +97,9 @@ struct ImageModelPicker: View {
         .onHover { h in withAnimation(LX.M.hover) { hover = h } }
         .help("Choose image model")
     }
-
-    private var subtitle: String {
-        guard let spec else { return "Download one in Models" }
-        if studio.phase == .loadingModel { return "Loading…" }
-        let p = ImagePreferences.params(for: spec)
-        var parts = [spec.style, "\(p.width)×\(p.height)"]
-        if studio.loadedModelID != spec.id.description { parts.append("not loaded") }
-        return parts.joined(separator: " · ")
-    }
 }
 
-/// Floating list of installed image models (window corner radius, like Chat's panel).
+/// Floating list of image models — same look and placement as Chat's model panel.
 struct ImageModelPanel: View {
     @Binding var open: Bool
     let selected: ImageModelSpec?
@@ -118,90 +108,109 @@ struct ImageModelPanel: View {
     private var library: ModelLibrary { AppServices.shared.models }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("IMAGE MODELS").font(LX.F.ui(9.5, .semibold)).kerning(0.8).foregroundStyle(LX.C.tertiary)
-                .padding(.horizontal, 10).padding(.top, 5).padding(.bottom, 3)
-            ForEach(library.imageModels) { m in
-                let spec = ImageModelSpec.spec(for: m.id)
-                let active = spec.id == selected?.id
-                PanelRow(selected: active) {
-                    ImagePreferences.select(m.id)
-                    withAnimation(LX.M.mini) { open = false }
-                } content: {
-                    HStack(spacing: 9) {
-                        Image(systemName: active ? "checkmark" : "paintpalette")
-                            .font(.system(size: active ? 11 : 12, weight: active ? .semibold : .regular))
-                            .foregroundStyle(active ? LX.C.accentText : LX.C.tertiary).frame(width: 18)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(spec.name).font(LX.F.ui(12.5, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
-                            Text("\(spec.style) · \(ModelDisplay.bytes(m.diskBytes))").font(LX.F.ui(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
-                        }
-                        Spacer(minLength: 8)
-                        if studio.loadedModelID == spec.id.description {
-                            Text("Loaded").font(LX.F.ui(10.5, .semibold)).foregroundStyle(LX.C.onGlass)
-                                .padding(.horizontal, 7).frame(height: 19)
-                                .accentGlass(radius: LX.R.xs, strength: 0.8)
-                        }
+        let loaded = library.imageModels.filter { $0.id.description == studio.loadedModelID }
+        let available = library.imageModels.filter { $0.id.description != studio.loadedModelID }
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    if !loaded.isEmpty {
+                        header("Loaded")
+                        ForEach(loaded) { row($0) }
                     }
-                    .padding(.horizontal, 9).frame(height: 42)
+                    if !available.isEmpty {
+                        header("Available").padding(.top, loaded.isEmpty ? 0 : 8)
+                        ForEach(available) { row($0) }
+                    }
+                    if library.imageModels.isEmpty {
+                        Text("No image models installed yet.").font(LX.F.body).foregroundStyle(LX.C.tertiary).padding(12)
+                    }
                 }
+                .padding(5)
             }
-            if library.imageModels.isEmpty {
-                Text("No image models yet.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary).padding(.horizontal, 10).frame(height: 32)
-            }
-            Rectangle().fill(LX.C.divider).frame(height: 1).padding(.vertical, 3)
+            .frame(maxHeight: 340)
+            .fixedSize(horizontal: false, vertical: true)
+            Rectangle().fill(LX.C.divider).frame(height: 1)
             if studio.loadedModelID != nil {
-                PanelRow {
+                PickerRowButton {
                     Task { await studio.unloadModel() }
-                    withAnimation(LX.M.mini) { open = false }
+                    close()
                 } content: {
-                    Label("Unload from Memory", systemImage: "eject").font(LX.F.ui(12)).foregroundStyle(LX.C.body)
-                        .padding(.horizontal, 10).frame(height: 30)
+                    HStack(spacing: 10) {
+                        Image(systemName: "eject").font(.system(size: 12)).foregroundStyle(LX.C.secondary).frame(width: 18)
+                        Text("Unload from Memory").font(LX.F.ui(12.5, .medium)).foregroundStyle(LX.C.body)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10).frame(height: 32)
                 }
                 .disabled(studio.isBusy)
+                .padding(.horizontal, 4).padding(.top, 4)
             }
-            PanelRow {
+            PickerRowButton {
                 state.modelsKind = .image
                 state.modelsTab = library.imageModels.isEmpty ? .discover : .installed
                 state.screen = .models
-                withAnimation(LX.M.mini) { open = false }
+                close()
             } content: {
-                Label("Manage Models", systemImage: "shippingbox").font(LX.F.ui(12)).foregroundStyle(LX.C.body)
-                    .padding(.horizontal, 10).frame(height: 30)
+                HStack(spacing: 10) {
+                    Image(systemName: "square.stack.3d.up").font(.system(size: 12)).foregroundStyle(LX.C.accentText).frame(width: 18)
+                    Text("Manage Models").font(LX.F.ui(12.5, .medium)).foregroundStyle(LX.C.accentText)
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(LX.C.tertiary)
+                }
+                .padding(.horizontal, 10).frame(height: 32)
             }
+            .padding(4)
         }
-        .padding(5)
         .frame(width: 300)
         .background {
             ZStack {
-                VisualEffectBlur(material: .hudWindow, blending: .withinWindow)
-                LX.C.overlay.opacity(0.75)
+                RoundedRectangle(cornerRadius: LX.R.window, style: .continuous).fill(.ultraThinMaterial)
+                RoundedRectangle(cornerRadius: LX.R.window, style: .continuous).fill(LX.C.overlay.opacity(0.88))
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: LX.R.window, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: LX.R.window, style: .continuous).strokeBorder(LX.C.edge, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: LX.R.window, style: .continuous)
+            .strokeBorder(LinearGradient(colors: [LX.C.highlight, .clear], startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.08)), lineWidth: 1))
         .shadow(color: .black.opacity(0.45), radius: 28, y: 18)
-        .background { Button("") { withAnimation(LX.M.mini) { open = false } }.keyboardShortcut(.escape, modifiers: []).opacity(0) }
+        .background { Button("") { close() }.keyboardShortcut(.escape, modifiers: []).opacity(0) }
     }
-}
 
-/// Full-width hoverable row for floating panels.
-struct PanelRow<Content: View>: View {
-    var selected = false
-    let action: () -> Void
-    @ViewBuilder let content: () -> Content
-    @State private var hover = false
+    private func close() { withAnimation(LX.M.mini) { open = false } }
 
-    var body: some View {
-        Button(action: action) {
-            content()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: LX.R.md, style: .continuous)
-                    .fill(selected ? LX.C.accent.opacity(hover ? 0.16 : 0.12) : Color.white.opacity(hover ? 0.06 : 0)))
-                .contentShape(Rectangle())
+    private func header(_ title: String) -> some View {
+        Text(title.uppercased()).font(LX.F.ui(9.5, .semibold)).kerning(0.8).foregroundStyle(LX.C.tertiary)
+            .padding(.horizontal, 10).padding(.top, 5).padding(.bottom, 3)
+    }
+
+    private func row(_ m: InstalledModel) -> some View {
+        let spec = ImageModelSpec.spec(for: m.id)
+        let active = spec.id == selected?.id
+        let loading = studio.phase == .loadingModel && active
+        return PickerRowButton(selected: active) {
+            ImagePreferences.select(m.id)
+            close()
+        } content: {
+            HStack(spacing: 9) {
+                Group {
+                    if loading { ProgressView().controlSize(.mini) }
+                    else { Image(systemName: active ? "checkmark" : "paintpalette").font(.system(size: active ? 11 : 13, weight: active ? .semibold : .regular)) }
+                }
+                .foregroundStyle(active ? LX.C.accentText : LX.C.tertiary)
+                .frame(width: 18, height: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(spec.name).font(LX.F.ui(12.5, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
+                    Text("\(spec.style) · \(ModelDisplay.bytes(m.diskBytes))").font(LX.F.ui(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                if active {
+                    Text("Active").font(LX.F.ui(10.5, .semibold)).foregroundStyle(LX.C.onGlass)
+                        .padding(.horizontal, 7).frame(height: 19)
+                        .accentGlass(radius: LX.R.xs, strength: 0.8)
+                }
+            }
+            .padding(.horizontal, 9).frame(height: 42)
         }
-        .buttonStyle(PressScaleStyle())
-        .onHover { h in withAnimation(LX.M.hover) { hover = h } }
     }
 }
 
@@ -250,6 +259,8 @@ struct ImageComposer: View {
     @State private var params: ImagePreferences.Params
     @State private var showNegative = false
     @State private var showLoRAs = false
+    @State private var showSource = false
+    @State private var dropTargeted = false
     @FocusState private var focused: Bool
     private var studio: ImageStudio { AppServices.shared.images }
 
@@ -263,6 +274,7 @@ struct ImageComposer: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
                 promptBox
+                sourceSection
                 negativeSection
                 setting("Size", params.size.aspect) {
                     Menu {
@@ -296,7 +308,7 @@ struct ImageComposer: View {
                                   range: spec.cfgRange, marker: spec.defaultCFG)
                 }
                 setting("Images", count > 1 ? "seed, seed+1, …" : "") {
-                    Segmented(options: [(1, "1"), (2, "2"), (4, "4")], selection: $count, mono: true)
+                    Segmented(options: (1...8).map { ($0, "\($0)") }, selection: $count, mono: true, compact: true)
                 }
                 setting("Seed", "same seed = same image") {
                     HStack(spacing: 6) {
@@ -343,6 +355,97 @@ struct ImageComposer: View {
         .overlay(RoundedRectangle(cornerRadius: LX.R.xl).strokeBorder(Color.white.opacity(focused ? 0.16 : 0.09), lineWidth: 1))
         .overlay { if studio.isBusy { GlowingBorder(radius: LX.R.xl).transition(.opacity) } }
         .animation(.easeInOut(duration: 0.3), value: studio.isBusy)
+    }
+
+    /// Image to image: a source picture (drop, choose, or "Use as source" from the history) + strength.
+    private var sourceSection: some View {
+        @Bindable var studio = studio
+        return VStack(alignment: .leading, spacing: 8) {
+            DisclosureHeader(title: "Image to image", open: $showSource,
+                             badge: studio.sourceImage == nil ? nil : String(format: "on · %.0f%%", studio.strength * 100))
+            if showSource || studio.sourceImage != nil {
+                if let data = studio.sourceImage, let image = NSImage(data: data) {
+                    HStack(spacing: 10) {
+                        Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                            .frame(width: 64, height: 64)
+                            .clipShape(RoundedRectangle(cornerRadius: LX.R.md, style: .continuous))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(studio.sourceLabel).font(LX.F.ui(12, .medium)).foregroundStyle(LX.C.primary).lineLimit(1)
+                            Text("\(Int(image.size.width)) × \(Int(image.size.height)) → cropped to \(params.size.label)")
+                                .font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        IconButton(symbol: "xmark", help: "Remove the source image") {
+                            withAnimation(LX.M.hover) { studio.sourceImage = nil }
+                        }
+                    }
+                    setting("Strength", String(format: "%.0f%% repainted", studio.strength * 100)) {
+                        CompactSlider(value: Binding(get: { studio.strength }, set: { studio.strength = ($0 * 20).rounded() / 20 }),
+                                      range: 0.1...1, marker: 0.6)
+                    }
+                    Text("Low keeps the picture, high follows the prompt. \(max(1, Int(Double(params.steps) * studio.strength))) of \(params.steps) steps run.")
+                        .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Button(action: chooseSource) {
+                        VStack(spacing: 6) {
+                            Image(systemName: "photo.badge.plus").font(.system(size: 18, weight: .light))
+                            Text("Drop an image or click to choose").font(LX.F.ui(12))
+                        }
+                        .foregroundStyle(dropTargeted ? LX.C.accentText : LX.C.tertiary)
+                        .frame(maxWidth: .infinity).frame(height: 76)
+                        .background(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous)
+                            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                            .foregroundStyle(dropTargeted ? LX.C.accent : Color.white.opacity(0.16)))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .onDrop(of: [.fileURL, .image], isTargeted: $dropTargeted) { providers in
+            loadDropped(providers)
+            return true
+        }
+    }
+
+    private func chooseSource() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        guard panel.runModal() == .OK, let url = panel.url, let data = try? Data(contentsOf: url) else { return }
+        setSource(data, label: url.lastPathComponent)
+    }
+
+    private func loadDropped(_ providers: [NSItemProvider]) {
+        guard let provider = providers.first else { return }
+        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            _ = provider.loadDataRepresentation(for: .fileURL) { data, _ in
+                guard let data, let url = URL(dataRepresentation: data, relativeTo: nil),
+                      let bytes = try? Data(contentsOf: url) else { return }
+                let name = url.lastPathComponent
+                Task { @MainActor in setSource(bytes, label: name) }
+            }
+        } else {
+            _ = provider.loadDataRepresentation(for: .image) { data, _ in
+                guard let data else { return }
+                Task { @MainActor in setSource(data, label: "Dropped image") }
+            }
+        }
+    }
+
+    /// Sets the source and picks the model size closest to its aspect ratio.
+    private func setSource(_ data: Data, label: String) {
+        guard let image = NSImage(data: data), image.size.width > 0, image.size.height > 0 else {
+            studio.clearMessages()
+            return
+        }
+        studio.sourceImage = data
+        studio.sourceLabel = label
+        showSource = true
+        let aspect = image.size.width / image.size.height
+        if let best = spec.sizes.filter({ $0.megapixels >= spec.defaultSize.megapixels * 0.8 })
+            .min(by: { abs(Double($0.width) / Double($0.height) - aspect) < abs(Double($1.width) / Double($1.height) - aspect) }) {
+            params.width = best.width; params.height = best.height
+        }
     }
 
     private var negativeSection: some View {
@@ -451,7 +554,8 @@ struct ImageComposer: View {
         let seed = UInt64(studio.draftSeed.trimmingCharacters(in: .whitespaces)) ?? ImageRequest.randomSeed()
         studio.generate(ImageRequest(prompt: studio.draftPrompt, negativePrompt: studio.draftNegative, steps: params.steps,
                                      cfg: params.cfg, seed: seed, count: count, size: params.size,
-                                     loras: studio.activeLoRAs.filter { $0.scale != 0 }), spec: spec)
+                                     loras: studio.activeLoRAs.filter { $0.scale != 0 },
+                                     source: studio.sourceImage, strength: studio.strength), spec: spec)
     }
 }
 
@@ -653,6 +757,7 @@ struct ImageDetailBar: View {
         if record.cfg > 1 { parts.append(String(format: "CFG %.1f", record.cfg)) }
         parts.append("seed \(record.seed)")
         if !record.loras.isEmpty { parts.append(record.loras) }
+        if record.strength > 0 { parts.append(String(format: "img2img %.0f%%", record.strength * 100)) }
         parts.append(String(format: "%.1f s", record.duration))
         return parts.joined(separator: " · ")
     }
@@ -670,6 +775,9 @@ struct ImageDetailBar: View {
                     studio.draftPrompt = record.prompt
                     studio.draftNegative = record.negativePrompt
                     studio.draftSeed = String(record.seed)
+                }
+                IconButton(symbol: "photo.on.rectangle", help: "Use as the source for image to image") {
+                    studio.useAsSource(record)
                 }
                 IconButton(symbol: copied ? "checkmark" : "doc.on.doc", help: "Copy image") {
                     ImageActions.copy(record)
@@ -779,6 +887,7 @@ struct HistoryThumb: View {
                 studio.draftPrompt = record.prompt
                 studio.draftSeed = String(record.seed)
             }
+            Button("Use as Source Image") { studio.useAsSource(record) }
             Button("Copy Image") { ImageActions.copy(record) }
             Button("Save As…") { ImageActions.saveAs(record) }
             Button("Show in Finder") { ImageActions.reveal(record) }

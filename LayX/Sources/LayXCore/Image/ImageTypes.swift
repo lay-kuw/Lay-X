@@ -180,9 +180,18 @@ public struct ImageRequest: Sendable, Hashable {
     public var count: Int
     public var size: ImageSize
     public var loras: [LoRAChoice]
+    /// Image to image: the source picture (PNG/JPEG data, cropped to `size`) and how much of it to repaint
+    /// (0 = keep, 1 = ignore the source).
+    public var source: Data?
+    public var strength: Double
+
+    /// Denoising steps actually run (image to image skips the first part of the schedule).
+    public var effectiveSteps: Int { source == nil ? steps : max(1, Int(Double(steps) * strength)) }
 
     public init(prompt: String, negativePrompt: String = "", steps: Int, cfg: Double = 0, seed: UInt64, count: Int = 1,
-                size: ImageSize = .init(512, 512), loras: [LoRAChoice] = []) {
+                size: ImageSize = .init(512, 512), loras: [LoRAChoice] = [], source: Data? = nil, strength: Double = 0.6) {
+        self.source = source
+        self.strength = strength
         self.prompt = prompt
         self.negativePrompt = negativePrompt
         self.steps = steps
@@ -243,12 +252,16 @@ public struct ImageRecord: Sendable, Hashable, Identifiable {
     public var height: Int
     /// e.g. "pixel-art-xl ×0.8" (empty without LoRAs).
     public var loras: String
+    /// Image to image strength (0 = text to image).
+    public var strength: Double
     /// File name inside the images folder.
     public var file: String
     public var duration: Double
 
     public init(id: UUID = UUID(), createdAt: Date = Date(), prompt: String, negativePrompt: String = "", modelID: String,
-                seed: UInt64, steps: Int, cfg: Double = 0, width: Int, height: Int, loras: String = "", file: String, duration: Double) {
+                seed: UInt64, steps: Int, cfg: Double = 0, width: Int, height: Int, loras: String = "", strength: Double = 0,
+                file: String, duration: Double) {
+        self.strength = strength
         self.id = id
         self.createdAt = createdAt
         self.prompt = prompt

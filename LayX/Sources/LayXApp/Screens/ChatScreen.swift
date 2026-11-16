@@ -128,7 +128,8 @@ struct ModelPicker: View {
                     }
                 }
                 .frame(width: 14, height: 14)
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                // Name → details gap ≈ the " · " gaps inside the details.
+                HStack(alignment: .firstTextBaseline, spacing: 11) {
                     Text(title).font(LX.F.ui(13, .semibold)).foregroundStyle(LX.C.primary)
                     if !subtitle.isEmpty {
                         Text(subtitle).font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
@@ -207,6 +208,21 @@ struct ModelPickerPanel: View {
             .frame(maxHeight: 340)
             .fixedSize(horizontal: false, vertical: true)
             Rectangle().fill(LX.C.divider).frame(height: 1)
+            if loadedID != nil {
+                PickerRowButton {
+                    library.unload()
+                    close()
+                } content: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "eject").font(.system(size: 12)).foregroundStyle(LX.C.secondary).frame(width: 18)
+                        Text("Unload from Memory").font(LX.F.ui(12.5, .medium)).foregroundStyle(LX.C.body)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10).frame(height: 32)
+                }
+                .disabled(inference.isGenerating)
+                .padding(.horizontal, 4).padding(.top, 4)
+            }
             PickerRowButton {
                 state.modelsKind = .language; state.modelsTab = .installed
                 state.screen = .models
@@ -287,8 +303,8 @@ struct ModelPickerPanel: View {
     }
 }
 
-/// Full-width hoverable row used in the model panel.
-private struct PickerRowButton<Content: View>: View {
+/// Full-width hoverable row used in the model panels (Chat and Image).
+struct PickerRowButton<Content: View>: View {
     var selected = false
     let action: () -> Void
     @ViewBuilder let content: () -> Content

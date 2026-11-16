@@ -9,6 +9,11 @@ struct ImageModelsPane: View {
     @EnvironmentObject var state: AppState
     @State private var selection: String?
     @State private var confirmDelete: InstalledModel?
+    @State private var hubResults: [HubModelSummary] = []
+    @State private var hubSort: HubAPI.Sort = .downloads
+    @State private var hubNext: URL?
+    @State private var hubLoading = false
+    @State private var hubError: String?
     private var library: ModelLibrary { AppServices.shared.models }
     private var studio: ImageStudio { AppServices.shared.images }
 
@@ -115,8 +120,94 @@ struct ImageModelsPane: View {
                 }
             }
             .well().clipShape(RoundedRectangle(cornerRadius: LX.R.lg))
-            Text("Any SDXL model in diffusers format works: paste its Hugging Face repo (owner/name) above and press Add model.")
-                .font(LX.F.caption).foregroundStyle(LX.C.tertiary)
+            hubSection
+        }
+        .task(id: "\(filter)|\(hubSort.rawValue)") {
+            try? await Task.sleep(for: .milliseconds(350))   // debounce typing
+            guard !Task.isCancelled else { return }
+            await searchHub(reset: true)
+        }
+    }
+
+    // MARK: Hugging Face (every SDXL pipeline in diffusers format)
+
+    private var hubSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                SectionLabel(text: "On Hugging Face", trailing: "SDXL · diffusers").fixedSize()
+                if hubLoading { ProgressView().controlSize(.small) }
+                Spacer()
+                Segmented(options: [(HubAPI.Sort.downloads, "Downloads"), (.trending, "Trending"), (.likes, "Likes"), (.updated, "Updated")],
+                          selection: $hubSort)
+            }
+            VStack(spacing: 0) {
+                header(["Model", "Author", "Downloads", "Status"])
+                ForEach(hubResults.filter { r in !ImageModelSpec.catalog.contains { $0.id == r.id } }) { r in
+                    let id = r.id.description
+                    row(selected: selection == id) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(r.id.name).font(LX.F.ui(12.5, .medium)).lineLimit(1)
+                            Text("\(r.likes.formatted(.number.notation(.compactName))) likes · \(ModelDisplay.age(r.lastModified))")
+                                .font(LX.F.ui(11)).foregroundStyle(LX.C.tertiary).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(r.id.owner).font(LX.F.ui(12)).foregroundStyle(LX.C.secondary).lineLimit(1).frame(width: 140, alignment: .leading)
+                        Text(r.downloads.formatted(.number.notation(.compactName))).font(LX.F.mono(12)).frame(width: 80, alignment: .trailing)
+                        hubStatus(r.id).frame(width: 90, alignment: .trailing)
+                    }
+                    .onTapGesture { selection = id }
+                }
+                if let hubError {
+                    Text(hubError).font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary).padding(.horizontal, 12).frame(height: LX.S.tableRow)
+                } else if hubResults.isEmpty && !hubLoading {
+                    Text(filter.isEmpty ? "No results." : "No SDXL models found for “\(filter)”.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).frame(height: LX.S.tableRow)
+                }
+            }
+            .well().clipShape(RoundedRectangle(cornerRadius: LX.R.lg))
+            HStack {
+                Text("Some repositories are gated or missing parts — Lay X checks before downloading. Each model has its own license.")
+                    .font(LX.F.caption).foregroundStyle(LX.C.tertiary)
+                Spacer()
+                if hubNext != nil {
+                    LXButton(title: "More", symbol: "chevron.down") { Task { await searchHub(reset: false) } }
+                        .disabled(hubLoading)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func hubStatus(_ id: ModelRepoID) -> some View {
+        if library.imageModels.contains(where: { $0.id == id }) {
+            Text("Installed").font(LX.F.ui(11)).foregroundStyle(LX.C.ok)
+        } else if case .active(let p)? = library.downloads[id] {
+            Text("\(Int(p.fraction * 100))%").font(LX.F.mono(11)).foregroundStyle(LX.C.liveCyan)
+        } else if case .failed? = library.downloads[id] {
+            Text("Failed").font(LX.F.ui(11)).foregroundStyle(LX.C.warn)
+        } else {
+            Button("Download") { library.download(id, kind: .image) }
+                .buttonStyle(.plain).font(LX.F.ui(11.5, .semibold)).foregroundStyle(LX.C.accentText)
+        }
+    }
+
+    private func searchHub(reset: Bool) async {
+        hubLoading = true
+        defer { hubLoading = false }
+        do {
+            let hub = HubAPI()
+            let page: HubAPI.Page
+            if !reset, let next = hubNext {
+                page = try await hub.page(at: next)
+            } else {
+                let q = filter.trimmingCharacters(in: .whitespaces)
+                page = try await hub.searchPage(ModelRepoID(q) != nil ? "" : q, author: ModelRepoID(q)?.owner, sort: hubSort,
+                                                limit: 40, filter: "diffusers:StableDiffusionXLPipeline")
+            }
+            hubResults = reset ? page.results : hubResults + page.results
+            hubNext = page.next
+            hubError = nil
+        } catch {
+            hubError = "Hugging Face couldn’t be reached (\((error as? LocalizedError)?.errorDescription ?? "offline")). Downloaded models keep working."
         }
     }
 

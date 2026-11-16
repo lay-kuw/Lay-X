@@ -563,6 +563,8 @@ struct Segmented<T: Hashable>: View {
     var mono = false
     /// Optional live indicator (SF Symbol) shown after a segment's title, e.g. while downloading.
     var indicators: [T: String] = [:]
+    /// Equal-width segments filling the row (for short numeric choices).
+    var compact = false
     var body: some View {
         HStack(spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.offset) { _, option in
@@ -577,7 +579,8 @@ struct Segmented<T: Hashable>: View {
                     }
                         .font(mono ? LX.F.mono(12) : LX.F.ui(12))
                         .foregroundStyle(selection == value ? LX.C.primary : LX.C.secondary)
-                        .padding(.horizontal, 10)
+                        .padding(.horizontal, compact ? 0 : 10)
+                        .frame(maxWidth: compact ? .infinity : nil)
                         .frame(height: 24)
                         .contentShape(Rectangle())
                         .background {

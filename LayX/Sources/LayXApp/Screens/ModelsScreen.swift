@@ -42,7 +42,7 @@ struct ModelsScreen: View {
                           indicators: library.activeDownloads.isEmpty ? [:] : [.downloads: "arrow.down.circle.fill"])
                     .padding(.leading, 10)
             } trailing: {
-                LXField(placeholder: state.modelsKind == .image ? "Paste an SDXL repo" : "Filter or paste HF repo", text: $filter, symbol: "magnifyingglass").frame(width: 220)
+                LXField(placeholder: state.modelsKind == .image ? "Search or paste SDXL repo" : "Filter or paste HF repo", text: $filter, symbol: "magnifyingglass").frame(width: 220)
                     .onSubmit { addModel() }
                 LXButton(title: "Add model", symbol: "plus", shortcut: "⌘⇧N", kind: .primary) { addModel() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
@@ -88,10 +88,10 @@ struct ModelsScreen: View {
             if selection == nil { selection = inference.loadedModel?.id ?? library.installed.first?.id.description }
         }
         .onChange(of: tab) { _, new in
-            if new == .discover && library.searchResults.isEmpty { library.search(filter, debounce: false) }
+            if new == .discover && state.modelsKind == .language && library.searchResults.isEmpty { library.search(filter, debounce: false) }
         }
         .onChange(of: filter) { _, new in
-            if tab == .discover { library.search(new) }
+            if tab == .discover && state.modelsKind == .language { library.search(new) }
         }
         .confirmationDialog("Delete \(confirmDelete.map(ModelDisplay.name) ?? "model")?",
                             isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),

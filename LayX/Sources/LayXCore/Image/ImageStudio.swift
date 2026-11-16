@@ -42,6 +42,17 @@ public final class ImageStudio {
     /// Fixed seed text ("" = random each time).
     public var draftSeed = ""
     public var draftNegative = ""
+    /// Image to image source (PNG/JPEG data) and its label; nil = text to image.
+    public var sourceImage: Data?
+    public var sourceLabel = ""
+    public var strength = 0.6
+
+    /// Uses a history image as the source for image to image.
+    public func useAsSource(_ record: ImageRecord) {
+        guard let url = url(for: record), let data = try? Data(contentsOf: url) else { return }
+        sourceImage = data
+        sourceLabel = "From history · seed \(record.seed)"
+    }
 
     @ObservationIgnored private let engine: any ImageEngine
     @ObservationIgnored private let coordinator: InferenceCoordinator
@@ -99,7 +110,8 @@ public final class ImageStudio {
         var req = request
         req.prompt = prompt
         req.steps = min(max(req.steps, 1), 100)
-        req.count = min(max(req.count, 1), 4)
+        req.count = min(max(req.count, 1), 8)
+        req.strength = min(max(req.strength, 0.05), 1)
         req.cfg = min(max(req.cfg, 0), 20)
         req.size = ImageSize(min(max(req.size.width / 64 * 64, 256), 2048), min(max(req.size.height / 64 * 64, 256), 2048))
         req.loras = req.loras.filter { $0.scale != 0 && loras?.url(for: $0.file) != nil }
@@ -154,6 +166,7 @@ public final class ImageStudio {
                     png: png, prompt: request.prompt, negativePrompt: request.cfg > 1 ? request.negativePrompt : "",
                     modelID: spec.id.description, seed: seed, steps: request.steps, cfg: request.cfg, size: request.size,
                     loras: request.loras.map { "\($0.displayName) ×\(String(format: "%.2g", $0.scale))" }.joined(separator: ", "),
+                    strength: request.source == nil ? 0 : request.strength,
                     duration: elapsed / Double(index + 1), index: index)
                 history.insert(record, at: 0)
                 selectedID = record.id

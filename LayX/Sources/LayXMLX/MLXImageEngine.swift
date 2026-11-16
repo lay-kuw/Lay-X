@@ -67,12 +67,26 @@ public actor MLXImageEngine: ImageEngine {
                 parameters.latentSize = [request.size.height / 8, request.size.width / 8]
                 parameters.imageCount = 1
                 let seed = parameters.seed
-                let total = parameters.steps
+                let total = request.effectiveSteps
+                let source = try request.source.map { try Self.sourcePixels($0, size: request.size) }
+                let strength = Float(request.strength)
                 continuation.yield(.progress(index: index, step: 0, total: total))
                 let png: Data = try await generator.perform { [parameters] model in
                     var last: MLXArray?
                     var step = 0
-                    for xt in model.generateLatents(parameters: parameters) {
+                    let latents: DenoiseIterator
+                    if let source {
+                        guard let i2i = model as? ImageToImageGenerator else {
+                            throw ImageEngineError.generationFailed("this model can’t start from an image")
+                        }
+                        // RGB bytes → [-1, 1]
+                        let pixels = MLXArray(source.bytes, [source.height, source.width, 3])
+                        latents = i2i.generateLatents(image: (pixels.asType(.float32) / 255) * 2 - 1,
+                                                      parameters: parameters, strength: strength)
+                    } else {
+                        latents = model.generateLatents(parameters: parameters)
+                    }
+                    for xt in latents {
                         if Task.isCancelled { throw CancellationError() }
                         eval(xt)
                         last = xt
@@ -98,6 +112,39 @@ public actor MLXImageEngine: ImageEngine {
             continuation.finish(throwing: error is CancellationError ? CancellationError()
                                 : (error as? ImageEngineError) ?? ImageEngineError.generationFailed("\(error)"))
         }
+    }
+
+    struct Pixels: Sendable {
+        var bytes: [UInt8]
+        var width: Int
+        var height: Int
+    }
+
+    /// Decodes the source picture and center-crops / scales it to `size` (RGB, 8-bit).
+    static func sourcePixels(_ data: Data, size: ImageSize) throws -> Pixels {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            throw ImageEngineError.generationFailed("the source image couldn’t be read")
+        }
+        let w = size.width, h = size.height
+        var rgba = [UInt8](repeating: 0, count: w * h * 4)
+        let scale = max(Double(w) / Double(image.width), Double(h) / Double(image.height))
+        let dw = Double(image.width) * scale, dh = Double(image.height) * scale
+        let ok = rgba.withUnsafeMutableBytes { ptr -> Bool in
+            guard let ctx = CGContext(data: ptr.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
+            else { return false }
+            ctx.interpolationQuality = .high
+            ctx.draw(image, in: CGRect(x: (Double(w) - dw) / 2, y: (Double(h) - dh) / 2, width: dw, height: dh))
+            return true
+        }
+        guard ok else { throw ImageEngineError.generationFailed("the source image couldn’t be prepared") }
+        var rgb = [UInt8](repeating: 0, count: w * h * 3)
+        for i in 0..<(w * h) {
+            rgb[i * 3] = rgba[i * 4]; rgb[i * 3 + 1] = rgba[i * 4 + 1]; rgb[i * 3 + 2] = rgba[i * 4 + 2]
+        }
+        return Pixels(bytes: rgb, width: w, height: h)
     }
 
     static func pngData(_ image: CGImage) -> Data? {

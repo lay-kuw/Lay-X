@@ -68,6 +68,9 @@ public enum LayXSchema {
             ALTER TABLE image_generation ADD COLUMN cfg REAL NOT NULL DEFAULT 0;
             ALTER TABLE image_generation ADD COLUMN loras TEXT NOT NULL DEFAULT '';
             """),
+        Migration(version: 6, sql: """
+            ALTER TABLE image_generation ADD COLUMN strength REAL NOT NULL DEFAULT 0;
+            """),
     ]
 
     public static let fileName = "LayX.sqlite"

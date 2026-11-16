@@ -32,12 +32,14 @@ public struct HubAPI: Sendable {
     }
 
     /// One page of MLX models, sorted by `sort` (descending).
-    public func searchPage(_ query: String, author: String? = "mlx-community", sort: Sort = .trending, limit: Int = 50) async throws -> Page {
+    /// `filter` is a Hub tag: "mlx" for MLX language models, "diffusers:StableDiffusionXLPipeline" for SDXL.
+    public func searchPage(_ query: String, author: String? = "mlx-community", sort: Sort = .trending, limit: Int = 50,
+                           filter: String = "mlx") async throws -> Page {
         guard var c = URLComponents(url: endpoint.appendingPathComponent("api/models"), resolvingAgainstBaseURL: false) else {
             throw ModelStoreError.network("invalid endpoint")
         }
         var items = [
-            URLQueryItem(name: "filter", value: "mlx"),
+            URLQueryItem(name: "filter", value: filter),
             URLQueryItem(name: "sort", value: sort.rawValue),
             URLQueryItem(name: "direction", value: "-1"),
             URLQueryItem(name: "limit", value: String(min(max(limit, 1), 100))),

@@ -453,10 +453,12 @@ open class StableDiffusionXL: StableDiffusion, TextToImageGenerator, ImageToImag
 
         var (x0, _) = autoencoder.encode(image[.newAxis])
         x0 = broadcast(x0, to: [parameters.imageCount] + x0.shape.dropFirst())
-        let xt = sampler.addNoise(x: x0, t: MLXArray(startStep))
+        let xt = sampler.addNoise(x: x0, t: MLXArray(startStep)).asType(dType)
 
+        // Lay X fix: denoise from the time the noise was added at (upstream started at maxTime, which
+        // re-noised a partly noisy latent and ignored most of the source image).
         return DenoiseIterator(
-            sd: self, xt: xt, t: sampler.maxTime, conditioning: conditioning, steps: numSteps,
+            sd: self, xt: xt, t: max(1, Int(startStep)), conditioning: conditioning, steps: max(1, numSteps),
             cfgWeight: parameters.cfgWeight, textTime: textTime)
     }
 }

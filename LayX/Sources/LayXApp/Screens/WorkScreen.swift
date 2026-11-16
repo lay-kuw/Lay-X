@@ -774,9 +774,11 @@ struct WorkModelBadge: View {
         if let model {
             HStack(spacing: 5) {
                 Image(systemName: "cpu").font(.system(size: 10))
-                Text(ModelDisplay.split(model.id).name).font(LX.F.ui(11.5, .medium))
-                Text(ModelDisplay.subtitle(model, withSize: false)).font(LX.F.mono(10)).foregroundStyle(LX.C.tertiary)
-                if loaded == nil { Text("· not loaded").font(LX.F.mono(10)).foregroundStyle(LX.C.tertiary) }
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(ModelDisplay.split(model.id).name).font(LX.F.ui(11.5, .medium))
+                    Text(ModelDisplay.subtitle(model, withSize: false) + (loaded == nil ? " · not loaded" : ""))
+                        .font(LX.F.mono(10)).foregroundStyle(LX.C.tertiary)
+                }
             }
             .foregroundStyle(LX.C.secondary)
             .lineLimit(1)

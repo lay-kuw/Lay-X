@@ -266,7 +266,9 @@ nonisolated enum CommandLineTools {
                 let t = Date()
                 await MainActor.run {
                     studio.generate(ImageRequest(prompt: prompt, negativePrompt: env["LAYX_IMAGE_NEG"] ?? "", steps: steps, cfg: cfg,
-                                                 seed: 42, count: count, size: size, loras: choices), spec: spec)
+                                                 seed: 42, count: count, size: size, loras: choices,
+                                                 source: env["LAYX_IMAGE_SOURCE"].flatMap { try? Data(contentsOf: URL(fileURLWithPath: $0)) },
+                                                 strength: Double(env["LAYX_IMAGE_STRENGTH"] ?? "") ?? 0.6), spec: spec)
                 }
                 try await Task.sleep(for: .milliseconds(50))
                 while await MainActor.run(body: { studio.isBusy }) { try await Task.sleep(for: .milliseconds(20)) }
@@ -280,7 +282,7 @@ nonisolated enum CommandLineTools {
             let urls = await MainActor.run { records.compactMap { studio.url(for: $0) } }
             if urls.count >= 2 { print("seed reproducible: \((try? Data(contentsOf: urls[0])) == (try? Data(contentsOf: urls[1])))") }
             if let out = env["LAYX_IMAGE_OUT"], let first = urls.last {
-                let target = URL(fileURLWithPath: out).appendingPathComponent("\(spec.id.name)-\(size.width)x\(size.height)\(choices.isEmpty ? "" : "-lora").png")
+                let target = URL(fileURLWithPath: out).appendingPathComponent("\(spec.id.name)-\(size.width)x\(size.height)\(choices.isEmpty ? "" : "-lora")\(env["LAYX_IMAGE_SOURCE"] == nil ? "" : "-i2i").png")
                 try? FileManager.default.removeItem(at: target)
                 try FileManager.default.copyItem(at: first, to: target)
                 print("image: \(target.path)")

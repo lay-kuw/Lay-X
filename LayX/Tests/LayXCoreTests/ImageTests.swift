@@ -111,6 +111,15 @@ struct ImageHistoryStoreTests {
         #expect(r.files == nil && r.missing.contains("unet/config.json"))
     }
 
+    @Test func imageToImageRunsPartOfTheSchedule() {
+        var r = ImageRequest(prompt: "p", steps: 30, seed: 1)
+        #expect(r.effectiveSteps == 30)
+        r.source = Data([1]); r.strength = 0.5
+        #expect(r.effectiveSteps == 15)
+        r.strength = 0.01
+        #expect(r.effectiveSteps == 1)
+    }
+
     @Test func catalogAndSizes() {
         #expect(ImageModelSpec.catalog.allSatisfy { $0.sizes.contains($0.defaultSize) && $0.stepRange.contains($0.defaultSteps) })
         #expect(ImageSize.sdxl.allSatisfy { $0.width % 64 == 0 && $0.height % 64 == 0 })
@@ -256,6 +265,18 @@ struct ImageStudioTests {
         #expect(await imageEngine.probeFailures == 0)
         // The text tokens were all emitted before any image step (FIFO behind the running chat).
         #expect(await textEngine.emissionLog.count == 30)
+    }
+
+    @Test func imageToImageIsRecorded() async throws {
+        let (studio, dir) = try makeStudio(engine: ScriptedImageEngine(), coordinator: InferenceCoordinator(engine: ScriptedEngine()), free: { .max })
+        defer { try? FileManager.default.removeItem(at: dir) }
+        studio.generate(ImageRequest(prompt: "p", steps: 4, seed: 1, count: 8, source: Data([1, 2]), strength: 0.75), spec: .sdxlTurbo)
+        try await waitIdle(studio)
+        #expect(studio.history.count == 8, "up to 8 images per run")
+        #expect(studio.history.allSatisfy { $0.strength == 0.75 })
+        studio.generate(ImageRequest(prompt: "p", steps: 4, seed: 1), spec: .sdxlTurbo)
+        try await waitIdle(studio)
+        #expect(studio.history.first?.strength == 0)
     }
 
     @Test func stopCancels() async throws {
