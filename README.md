@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="LayX/Sources/LayXIcon/LX.png" width="128" alt="Lay X icon">
+<img src="Sources/LayXIcon/LX.png" width="128" alt="Lay X icon">
 
 # Lay X ✨
 
@@ -15,7 +15,7 @@ No cloud. No account. No sneaky uploads. Just you, your Apple Silicon, and a ver
 ![Privacy](https://img.shields.io/badge/privacy-on--device-34d399?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-f9a8d4?style=flat-square)
 
-<img src="design/screens/D-main.png" width="820" alt="Lay X chat window (design)">
+<img src="assets/screenshot-chat.png" width="820" alt="Lay X chat window (design)">
 
 </div>
 
@@ -46,8 +46,8 @@ lights that shimmer while the model thinks. 🔮
 | 🤝 **Plays nice** | Chat jumps in while Work is busy — Work politely pauses, then picks up exactly where it left off. |
 
 <div align="center">
-<img src="design/screens/D-mini.png" width="400" alt="Mini Chat (design)">
-<img src="design/screens/D-Work.png" width="400" alt="Work (design)">
+<img src="assets/screenshot-mini-chat.png" width="400" alt="Mini Chat (design)">
+<img src="assets/screenshot-work.png" width="400" alt="Work (design)">
 <br><sub>Mini Chat and Work (design mockups)</sub>
 </div>
 
@@ -80,7 +80,6 @@ xcodebuild -downloadComponent MetalToolchain
 ### Build & run
 
 ```bash
-cd LayX
 scripts/build-app.sh      # release build → build/LayX.app  (runs a tiny GPU self‑test too)
 open build/LayX.app
 ```
@@ -189,23 +188,22 @@ Anything that speaks the OpenAI chat API can point its base URL at `http://127.0
 
 ```
 Lay-X/
-├── LayX/            the app (Swift package)
-│   ├── Sources/
-│   │   ├── LayXCore     chats, prompts, inference coordinator, models, Work, performance, SQLite
-│   │   ├── LayXMLX      the MLX engines (text: mlx-swift-lm · images: SDXL, Z-Image, FLUX.2 klein, Qwen-Image)
-│   │   ├── StableDiffusionMLX  SDXL on MLX + LoRA merging (vendored, MIT)
-│   │   ├── LayXServer   OpenAI-compatible server (Hummingbird)
-│   │   └── LayXApp      SwiftUI app, design system, screens, Mini Chat
-│   ├── Tests/
-│   └── scripts/         build-app.sh, test-core.sh, make-icon.swift
-├── DesignPreview/   a mock-data preview of the Glass Studio design
-└── design/          design system notes, canvases and screenshots
+├── Sources/
+│   ├── LayXCore     chats, prompts, inference coordinator, models, Work, image studio, performance, SQLite
+│   ├── LayXMLX      the MLX engines (text: mlx-swift-lm · images: SDXL, Z-Image, FLUX.2 klein, Qwen-Image)
+│   ├── StableDiffusionMLX  SDXL on MLX + LoRA merging + checkpoint import (vendored, MIT)
+│   ├── LayXServer   OpenAI-compatible server (Hummingbird)
+│   ├── LayXApp      SwiftUI app, design system, screens, Mini Chat
+│   └── LayXIcon     app icon source
+├── Tests/
+├── App/             Info.plist and entitlements for the .app bundle
+├── scripts/         build-app.sh, make-dmg.sh, test-core.sh, make-icon.swift
+└── assets/          screenshots for this README
 ```
 
-Developer notes (tests, headless check commands, icon pipeline) live in [`LayX/README.md`](LayX/README.md).
+Developer notes (tests, headless check commands, icon pipeline) live in [`DEVELOPMENT.md`](DEVELOPMENT.md).
 
 ```bash
-cd LayX
 scripts/test-core.sh   # core + server test suites
 ```
 

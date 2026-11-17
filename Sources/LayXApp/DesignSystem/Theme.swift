@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Design tokens (see design/02-design-system.md)
+// MARK: - Design tokens (Glass Studio)
 
 extension Color {
     init(hex: UInt32, alpha: Double = 1) {
@@ -70,6 +70,13 @@ enum LX {
         static let defaultValue = 0.5
         /// Multiplier for pane / panel tints. 1.0 at the default.
         static func tintScale(_ t: Double) -> Double { 1.6 - 1.2 * t }
+        /// Full-glass mode: the window base over the blurred wallpaper and the pane tints are multiplied by these,
+        /// and panes drop their extra frosted material, so the wallpaper clearly shows through everywhere.
+        static let fullGlassScale = 0.25
+        static let fullGlassPaneScale = 0.3
+        static let fullGlassWellScale = 0.45
+        static let fullGlassKey = "lx.fullGlass"
+        static let seamlessKey = "lx.seamlessLayout"
         /// Opacity of the dark base over the wallpaper blur.
         static func baseOpacity(_ t: Double) -> Double { 0.97 - 0.17 * t - 0.5 * t * t }
     }

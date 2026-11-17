@@ -69,7 +69,7 @@ let package = Package(
             exclude: ["LICENSE-mlx-swift-examples.txt"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
-        // SwiftUI application (design system ported verbatim from DesignPreview).
+        // SwiftUI application (Glass Studio design system, screens, Mini Chat).
         .executableTarget(
             name: "LayXApp",
             dependencies: ["LayXCore", "LayXServer", "LayXMLX"],

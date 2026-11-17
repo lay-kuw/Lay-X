@@ -14,7 +14,6 @@ OpenAI-compatible API server, all on one on-device inference engine.
 
 ## Build & run
 ```bash
-cd LayX
 scripts/build-app.sh            # release build → build/LayX.app (+ MLX GPU self-test)
 scripts/build-app.sh debug      # debug build
 open build/LayX.app
@@ -27,7 +26,6 @@ into the field and press Add model.
 
 ## Tests
 ```bash
-cd LayX
 scripts/test-core.sh            # LayXCore + LayXServer suites (no Metal needed; preserves Package.resolved)
 ```
 
@@ -61,7 +59,7 @@ Source: `Sources/LayXIcon/LX.png` (square, ≥ 1024 px). `scripts/build-app.sh` 
 | `LayXMLX` | `MLXEngine` (mlx-swift-lm 3.32.3), `MLXImageEngine` (SDXL via `StableDiffusionMLX`; FLUX.2 klein 4B via `Klein` from flux2-klein-swift; Qwen-Image via `QwenImageEdit` from qwen-image-edit-swift — only their engine-free core libraries are linked, weights read from the local folder) |
 | `StableDiffusionMLX` | SDXL on MLX — vendored from ml-explore/mlx-swift-examples (MIT, notice in the folder); reads local weights only. Lay X additions: any SDXL diffusers checkpoint, size micro-conditioning, LoRA merging (`LoRA.swift`) |
 | `LayXServer` | OpenAI-compatible server (Hummingbird 2.28.1), API keys (Keychain) |
-| `LayXApp` | SwiftUI app — design system from `DesignPreview/`, screens, Mini Chat panel |
+| `LayXApp` | SwiftUI app — design system (Glass Studio), screens, Mini Chat panel |
 
 Data: pinned chats + benchmarks in `LayX.sqlite` (default `~/.config/lay-x/database/`, movable);
 models in `~/.config/lay-x/models` (movable; both folders are created if missing); API key hashes in the
