@@ -53,7 +53,7 @@ struct SettingsScreen: View {
     @AppStorage(EnginePreferences.gpuLimitKey) private var gpuLimit = 1.0
     @AppStorage(EnginePreferences.cacheBudgetKey) private var cacheBudgetGB = EnginePreferences.defaultCacheBudgetGB
     @AppStorage(EnginePreferences.warmUpKey) private var warmUp = true
-    @AppStorage(EnginePreferences.preloadKey) private var preload = true
+    @AppStorage(EnginePreferences.preloadKey) private var preload = false
     @AppStorage(WorkProjects.defaultWorkModelKey) private var defaultWorkID = ""
     @AppStorage(ChatPreferences.temperatureKey) private var temperature = ChatPreferences.defaultTemperature
     @AppStorage(ChatPreferences.topPKey) private var topP = ChatPreferences.defaultTopP

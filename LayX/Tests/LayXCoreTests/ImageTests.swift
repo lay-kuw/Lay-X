@@ -213,6 +213,16 @@ struct LoRALibraryTests {
         #expect(lib.list().map(\.name) == ["old", "papercut"])
         #expect(lib.url(for: "../evil.safetensors") == nil)
     }
+    @Test func refusesWholeModels() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("lx-lora-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let t = ["dtype": "F16", "shape": [4, 4], "data_offsets": [0, 32]] as [String: Any]
+        let file = tmp.appendingPathComponent("illustrious.safetensors")
+        try write(["model.diffusion_model.out.2.weight": t, "first_stage_model.encoder.conv_in.weight": t], to: file)
+        #expect(throws: LoRALibrary.ImportError.fullModel) { try LoRALibrary(folder: tmp.appendingPathComponent("lib")).importFile(file) }
+    }
+
     @Test func tellsBaseModelsApart() {
         func fit(_ keys: [String], _ base: String = "") -> LoRALibrary.Info.Fit { LoRALibrary.fit(keys: keys, base: base) }
         // FLUX.2 klein 4B: 5 double / 20 single blocks (BFL and diffusers names).
@@ -230,6 +240,13 @@ struct LoRALibraryTests {
         #expect(fit(["x"], "flux-2-klein-9b") == .otherBase("FLUX.2 klein 9B"))
         #expect(fit(["lora_te2_text_model_encoder_layers_0_mlp_fc1.lora_up.weight"]) == .fits(.sdxl))
         #expect(fit(["something"]) == .unknown)
+        // A whole checkpoint dropped in as a "LoRA" (the bug report): not applied, and refused on import.
+        let checkpoint = ["model.diffusion_model.input_blocks.0.0.weight", "first_stage_model.decoder.conv_in.weight",
+                          "conditioner.embedders.1.model.logit_scale"]
+        #expect(fit(checkpoint) == .fullModel)
+        #expect(LoRALibrary.isFullModel(checkpoint) && !LoRALibrary.isFullModel(["unet.down.lora_A.weight", "unet.x.alpha"]))
+        #expect(!ImageStudio.lora(LoRALibrary.Info(file: "c.safetensors", bytes: 0, fit: .fullModel, baseModel: nil, triggerWords: []),
+                                  fits: .sdxl))
         #expect(LoRALibrary.maxIndex(["single_transformer_blocks.30.x", "transformer_blocks.2.y"], after: ["transformer_blocks"]) == 2)
     }
 }

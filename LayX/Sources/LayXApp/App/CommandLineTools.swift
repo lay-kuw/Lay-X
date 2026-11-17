@@ -18,7 +18,7 @@ nonisolated enum CommandLineTools {
         case "--mlx-selftest":
             print("mlx-selftest: \(MLXSelfTest.run())")
             exit(0)
-        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check", "--preempt-check", "--watch-check", "--image-check":
+        case "--download", "--generate", "--list-models", "--engine-check", "--search", "--chat-check", "--work-check", "--benchmark", "--serve", "--keychain-check", "--soak", "--web-check", "--cache-check", "--preempt-check", "--watch-check", "--image-check", "--import-checkpoint":
             Task.detached {
                 do {
                     try await run(args)
@@ -303,6 +303,19 @@ nonisolated enum CommandLineTools {
                 let imageLoaded = await MainActor.run { studio.loadedModelID != nil }
                 print("text model reloaded: \(await coordinator.snapshot.model.loadedModel != nil), image model still loaded: \(imageLoaded)")
             }
+        case "--import-checkpoint":
+            // LayX --import-checkpoint /path/model.safetensors   (single-file SDXL → local/<name> image model)
+            guard args.count >= 3 else { throw ModelStoreError.notInstalled("checkpoint path") }
+            let file = URL(fileURLWithPath: args[2])
+            guard let template = store.installedModels().first(where: { $0.isImageModel && ImageFamily(modelType: $0.manifest.modelType) == .sdxl }),
+                  let id = ModelRepoID("local/\(file.deletingPathExtension().lastPathComponent)") else {
+                throw ModelStoreError.notInstalled("an SDXL template model")
+            }
+            let t0 = Date()
+            try ImageModelImport.sdxlCheckpoint(file, template: template.directory, to: store.directory(for: id))
+            let model = try store.registerLocalModel(id, modelType: ImageFamily.sdxl.rawValue, kind: .image)
+            print(String(format: "imported %@ in %.1f s, %.2f GB, %d files (template %@)", id.description, Date().timeIntervalSince(t0),
+                         Double(model.diskBytes) / 1e9, model.manifest.files.count, template.id.description))
         case "--watch-check":
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lx-watch-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

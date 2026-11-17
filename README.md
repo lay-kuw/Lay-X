@@ -126,6 +126,7 @@ it, save it anywhere, reuse its prompt & seed, or toss it. 🖼️
 | Animagine XL 4 | anime illustration |
 | SDXL Turbo | instant 512 px drafts |
 | *more on Hugging Face* | browse SDXL / FLUX.2 klein / Qwen‑Image pipelines in **Models → Image → Discover** |
+| *a Civitai / ComfyUI checkpoint* | **Models → Image → Import Model File…** turns a single `.safetensors` SDXL checkpoint (Pony, Illustrious…) into a Lay X model in seconds |
 
 Tweak **size**, **steps**, the number of images and the **seed**. Lay X only shows what the chosen model can
 use, so nothing silently does nothing: 🎛️

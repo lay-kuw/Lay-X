@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import LayXCore
 
 /// Models → Image: installed image models and the curated catalog (downloads use the shared downloader).
@@ -36,7 +37,7 @@ struct ImageModelsPane: View {
         HStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if tab == .installed { installed } else { discover }
+                    if tab == .installed { installed; importRow } else { discover }
                     ForEach(library.activeDownloads.filter { d in ImageModelSpec.spec(d.id.description) != nil || hubResults.contains { $0.id == d.id } }, id: \.id) { d in
                         HStack(spacing: 10) {
                             Image(systemName: "arrow.down.circle.fill").foregroundStyle(LX.C.liveCyan)
@@ -104,6 +105,31 @@ struct ImageModelsPane: View {
             }
         }
         .well().clipShape(RoundedRectangle(cornerRadius: LX.R.lg))
+    }
+
+    /// Single-file SDXL checkpoints (Civitai, ComfyUI, A1111…) become regular image models.
+    private var importRow: some View {
+        HStack(spacing: 10) {
+            if let name = library.importingCheckpoint {
+                ProgressView().controlSize(.small)
+                Text("Importing \(name)…").font(LX.F.ui(12)).foregroundStyle(LX.C.secondary)
+            } else {
+                LXButton(title: "Import Model File…", symbol: "square.and.arrow.down") { chooseCheckpoint() }
+                Text("A single .safetensors SDXL checkpoint (Pony, Illustrious, Civitai models…) — converted once, then it works like any other model.")
+                    .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func chooseCheckpoint() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "safetensors") ?? .data]
+        panel.message = "Choose an SDXL checkpoint (.safetensors). Lay X converts a copy; the file stays where it is."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            if let id = await library.importCheckpoint(url) { selection = id.description }
+        }
     }
 
     // MARK: Discover

@@ -420,3 +420,19 @@ final class QwenRuntime {
         return try MLXImageEngine.pngData(rgb: result.pixels, width: result.width, height: result.height)
     }
 }
+
+// MARK: - Checkpoint import
+
+/// Converts a single-file SDXL checkpoint (Civitai / ComfyUI / A1111 format) into a diffusers model folder.
+public enum ImageModelImport {
+    /// `template`: an installed SDXL model in diffusers layout (tokenizers and configs are copied from it).
+    public static func sdxlCheckpoint(_ file: URL, template: URL, to output: URL) throws {
+        do {
+            try SDXLCheckpoint.convert(file: file, template: template, to: output)
+            Memory.clearCache()
+        } catch {
+            Memory.clearCache()
+            throw error
+        }
+    }
+}

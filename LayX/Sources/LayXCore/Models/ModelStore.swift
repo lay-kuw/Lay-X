@@ -110,6 +110,31 @@ public struct ModelStore: Sendable {
         return result.sorted { $0.id < $1.id }
     }
 
+    /// Writes the manifest of a model folder made on this Mac (an imported checkpoint), which marks it installed.
+    @discardableResult
+    public func registerLocalModel(_ id: ModelRepoID, modelType: String, kind: ModelKind) throws -> InstalledModel {
+        let dir = directory(for: id)
+        guard Self.isContained(dir, in: root) else { throw ModelStoreError.unsafePath(id.description) }
+        let fm = FileManager.default
+        var files: [HubFile] = []
+        if let walker = fm.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) {
+            for case let url as URL in walker {
+                guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+                      !url.lastPathComponent.hasPrefix(".") else { continue }
+                let relative = String(url.standardizedFileURL.path.dropFirst(dir.standardizedFileURL.path.count + 1))
+                let size = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                files.append(HubFile(path: relative, size: size, sha256: nil))
+            }
+        }
+        let manifest = InstalledModelManifest(id: id, revision: "local", files: files.sorted { $0.path < $1.path },
+                                              downloadedAt: Date(), modelType: modelType, kind: kind)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(manifest).write(to: dir.appendingPathComponent(InstalledModelManifest.fileName), options: .atomic)
+        return InstalledModel(manifest: manifest, directory: dir, diskBytes: Self.allocatedSize(of: dir))
+    }
+
     public func installedModel(_ id: ModelRepoID) -> InstalledModel? {
         installedModels().first { $0.id == id }
     }

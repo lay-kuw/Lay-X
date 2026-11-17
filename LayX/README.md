@@ -43,6 +43,7 @@ $B --work-check   mlx-community/Qwen3-4B-4bit       # propose → nothing writte
 $B --benchmark    mlx-community/Qwen3-4B-4bit sweep # saved to the app database
 $B --serve        mlx-community/Qwen3-4B-4bit 18234 # headless API server (add "lan" for LAN + key)
 $B --soak         mlx-community/Qwen3-4B-4bit 80    # memory drift over repeated generations
+$B --import-checkpoint /path/model.safetensors     # single-file SDXL → local/<name> image model
 $B --image-check  [image-model] [text-model]        # download if needed, generate, memory arbitration
 #   env: LAYX_IMAGE_SIZE=1216x832 LAYX_IMAGE_STEPS=6 LAYX_IMAGE_CFG=2 LAYX_IMAGE_NEG="…" LAYX_IMAGE_LORA=/x.safetensors:0.8
 #        LAYX_IMAGE_LORA_SWAP=1 (LoRA switched on for the 2nd image) LAYX_IMAGE_SOURCE=/x.png LAYX_IMAGE_STRENGTH=0.6

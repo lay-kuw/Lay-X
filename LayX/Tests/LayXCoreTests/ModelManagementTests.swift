@@ -358,3 +358,21 @@ struct FixedArchitectures: ModelArchitectureSupport {
         #expect(c.bits == 8)
     }
 }
+
+@Suite struct LocalModelTests {
+    @Test func importedFolderBecomesAnInstalledImageModel() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("lx-local-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ModelStore(root: root)
+        let id = ModelRepoID("local/my-checkpoint")!
+        let dir = store.directory(for: id)
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("unet"), withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 10).write(to: dir.appendingPathComponent("unet/diffusion_pytorch_model.fp16.safetensors"))
+        try Data("{}".utf8).write(to: dir.appendingPathComponent("model_index.json"))
+        #expect(store.installedModel(id) == nil)
+        let model = try store.registerLocalModel(id, modelType: "sdxl", kind: .image)
+        #expect(model.manifest.files.map(\.path) == ["model_index.json", "unet/diffusion_pytorch_model.fp16.safetensors"])
+        let found = try #require(store.installedModel(id))
+        #expect(found.isImageModel && found.manifest.modelType == "sdxl" && found.manifest.revision == "local")
+    }
+}

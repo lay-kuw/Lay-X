@@ -13,7 +13,7 @@ enum EnginePreferences {
 
     /// Default KV-cache budget: 1/16 of RAM, between 1 and 8 GB.
     static var defaultCacheBudgetGB: Double { min(max((physicalGB / 16).rounded(), 1), 8) }
-    static var preloadModel: Bool { UserDefaults.standard.object(forKey: preloadKey) as? Bool ?? true }
+    static var preloadModel: Bool { UserDefaults.standard.object(forKey: preloadKey) as? Bool ?? false }
 
     static let keepLoadedOptions: [(minutes: Int, label: String)] = [(5, "5 minutes"), (15, "15 minutes"), (60, "1 hour"), (0, "Always")]
     static var physicalGB: Double { Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824 }

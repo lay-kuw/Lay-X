@@ -233,11 +233,11 @@ public final class ImageStudio {
     }
 
     /// A LoRA can be used with `family` (unknown formats are tried; the engine reports what applied).
-    public static func lora(_ info: LoRALibrary.Info, fits family: ImageFamily) -> Bool {
+    public nonisolated static func lora(_ info: LoRALibrary.Info, fits family: ImageFamily) -> Bool {
         switch info.fit {
         case .fits(let base): base == family.loraBase
         case .unknown: true
-        case .otherBase: false
+        case .otherBase, .fullModel: false
         }
     }
 
@@ -304,6 +304,8 @@ public final class ImageStudio {
                 if !activeLoRAs.contains(where: { $0.file == info.file }) { activeLoRAs.append(LoRAChoice(file: info.file, scale: 1)) }
             case .otherBase(let base):
                 notice = "Added \(info.name), but it was made for \(base) — Lay X can’t apply it."
+            case .fullModel:
+                break   // refused by the library
             }
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? "The LoRA couldn’t be added."

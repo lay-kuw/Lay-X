@@ -19,6 +19,8 @@ public struct LoRALibrary: Sendable {
             case fits(LoRABase)
             /// Made for another base model (SD 1.x / 2.x, FLUX.1, klein 9B…): it won't apply.
             case otherBase(String)
+            /// A whole model (single-file checkpoint), not a LoRA — import it in Models instead.
+            case fullModel
             case unknown
         }
         public var file: String
@@ -33,9 +35,10 @@ public struct LoRALibrary: Sendable {
     }
 
     public enum ImportError: Error, LocalizedError, Equatable {
-        case notSafetensors, unreadable, alreadyExists(String)
+        case notSafetensors, unreadable, alreadyExists(String), fullModel
         public var errorDescription: String? {
             switch self {
+            case .fullModel: "This file is a whole model (checkpoint), not a LoRA. Add it in Models → Image → Import Model File…"
             case .notSafetensors: "Only .safetensors LoRA files can be added."
             case .unreadable: "That file isn’t a valid safetensors file."
             case .alreadyExists(let n): "A LoRA named “\(n)” is already added."
@@ -72,7 +75,8 @@ public struct LoRALibrary: Sendable {
     @discardableResult
     public func importFile(_ source: URL) throws -> Info {
         guard source.pathExtension.lowercased() == "safetensors" else { throw ImportError.notSafetensors }
-        guard (try? Self.header(of: source)) != nil else { throw ImportError.unreadable }
+        guard let header = try? Self.header(of: source) else { throw ImportError.unreadable }
+        if Self.isFullModel(Array(header.keys)) { throw ImportError.fullModel }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let name = source.lastPathComponent.replacingOccurrences(of: "/", with: "_")
         guard Self.isSafeName(name) else { throw ImportError.notSafetensors }
@@ -127,7 +131,19 @@ public struct LoRALibrary: Sendable {
         return (fit(keys: keys, base: base ?? ""), base, triggers)
     }
 
+    /// A checkpoint (UNet / VAE / text encoder weights) rather than low-rank adapters.
+    public static func isFullModel(_ keys: [String]) -> Bool {
+        let adapter = keys.contains { k in
+            let l = k.lowercased()
+            return l.contains("lora") || l.contains("lokr") || l.contains("hada_") || l.hasSuffix(".alpha")
+        }
+        guard !adapter else { return false }
+        return keys.contains { $0.hasPrefix("model.diffusion_model.") || $0.hasPrefix("first_stage_model.") || $0.hasPrefix("unet.") }
+            || keys.count > 1500
+    }
+
     static func fit(keys: [String], base: String) -> LoRALibrary.Info.Fit {
+        if isFullModel(keys) { return .fullModel }
         let lowerBase = base.lowercased()
         if lowerBase.contains("qwen") { return .fits(.qwenImage) }
         if lowerBase.contains("klein") {

@@ -769,22 +769,29 @@ struct WorkModelBadge: View {
     private var library: ModelLibrary { AppServices.shared.models }
 
     var body: some View {
-        let loaded = inference.loadedModel.flatMap { library.model($0.id) }
-        let model = loaded ?? WorkProjects.defaultWorkModel(in: library)
-        if let model {
-            HStack(spacing: 5) {
-                Image(systemName: "cpu").font(.system(size: 10))
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
+        // Same rule as Chat's header: only a model in memory (or loading) is shown.
+        let loadingID: String? = { if case .loading(let id, _) = inference.snapshot.model { id } else { nil } }()
+        let model = (inference.loadedModel?.id ?? loadingID).flatMap { library.model($0) }
+        HStack(spacing: 5) {
+            Group {
+                if loadingID != nil { ProgressView().controlSize(.mini) }
+                else { Image(systemName: "cpu").font(.system(size: 10)) }
+            }
+            .frame(width: 12, height: 12)
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                if let model {
                     Text(ModelDisplay.split(model.id).name).font(LX.F.ui(11.5, .medium))
-                    Text(ModelDisplay.subtitle(model, withSize: false) + (loaded == nil ? " · not loaded" : ""))
+                    Text(loadingID != nil ? "Loading…" : ModelDisplay.subtitle(model, withSize: false))
                         .font(LX.F.mono(10)).foregroundStyle(LX.C.tertiary)
+                } else {
+                    Text(library.installed.isEmpty ? "No model" : "No model loaded").font(LX.F.ui(11.5, .medium))
                 }
             }
-            .foregroundStyle(LX.C.secondary)
-            .lineLimit(1)
-            .padding(.leading, 6)
-            .help("Model used by Work")
         }
+        .foregroundStyle(LX.C.secondary)
+        .lineLimit(1)
+        .padding(.leading, 6)
+        .help("Model used by Work")
     }
 }
 

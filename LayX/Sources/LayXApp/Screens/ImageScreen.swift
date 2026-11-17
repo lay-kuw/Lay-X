@@ -33,6 +33,13 @@ struct ImageScreen: View {
                     Rectangle().fill(LX.C.divider).frame(width: 1)
                     ImageHistoryGrid().frame(width: 236)
                 }
+            } else if !studio.history.isEmpty {
+                // No model chosen: a gallery of everything made so far.
+                HStack(spacing: 0) {
+                    ImageCanvas().frame(maxWidth: .infinity)
+                    Rectangle().fill(LX.C.divider).frame(width: 1)
+                    ImageHistoryGrid(columns: 3).frame(width: 420)
+                }
             } else if !library.imageModels.isEmpty {
                 ChooseImageModelCard().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -131,6 +138,21 @@ struct ImageModelPanel: View {
             .frame(maxHeight: 340)
             .fixedSize(horizontal: false, vertical: true)
             Rectangle().fill(LX.C.divider).frame(height: 1)
+            if selected != nil {
+                PickerRowButton {
+                    ImagePreferences.select(nil)
+                    close()
+                } content: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "xmark.circle").font(.system(size: 12)).foregroundStyle(LX.C.secondary).frame(width: 18)
+                        Text("Deselect Model").font(LX.F.ui(12.5, .medium)).foregroundStyle(LX.C.body)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10).frame(height: 32)
+                }
+                .disabled(studio.isBusy)
+                .padding(.horizontal, 4).padding(.top, 4)
+            }
             if studio.loadedModelID != nil {
                 PickerRowButton {
                     // Like Chat: after unloading, no model is shown as chosen.
@@ -776,6 +798,7 @@ struct LoRARow: View {
         switch info.fit {
         case .fits(let base): base.displayName
         case .otherBase(let base): base
+        case .fullModel: "full model"
         case .unknown: nil
         }
     }
@@ -796,9 +819,22 @@ struct LoRARow: View {
                 Spacer(minLength: 4)
                 if let baseLabel {
                     Text(baseLabel).font(LX.F.mono(9.5)).foregroundStyle(usable ? LX.C.tertiary : LX.C.warn).lineLimit(1)
-                        .help(usable ? "Made for \(baseLabel)" : "Made for \(baseLabel) — it can’t be used with \(family.displayName) models")
+                        .help(info.fit == .fullModel ? "This is a whole model, not a LoRA — use “Import as Image Model” in the ⋯ menu"
+                              : usable ? "Made for \(baseLabel)" : "Made for \(baseLabel) — it can’t be used with \(family.displayName) models")
                 }
                 Menu {
+                    if info.fit == .fullModel, let url = studio.loraFolder?.appendingPathComponent(info.file) {
+                        Button("Import as Image Model") {
+                            Task {
+                                // The converted model lives in Models; the misplaced file leaves the LoRA list.
+                                if let id = await AppServices.shared.models.importCheckpoint(url) {
+                                    studio.deleteLoRA(info.file)
+                                    ImagePreferences.select(id)
+                                }
+                            }
+                        }
+                        Divider()
+                    }
                     Button("Delete LoRA", role: .destructive) { studio.deleteLoRA(info.file) }
                 } label: {
                     Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold)).foregroundStyle(LX.C.tertiary)
@@ -982,6 +1018,8 @@ enum ImageActions {
 // MARK: - History
 
 struct ImageHistoryGrid: View {
+    var columns = 2
+    @FocusState private var focused: Bool
     private var studio: ImageStudio { AppServices.shared.images }
 
     var body: some View {
@@ -993,23 +1031,52 @@ struct ImageHistoryGrid: View {
                     .font(LX.F.caption).foregroundStyle(LX.C.tertiary).padding(.horizontal, 14)
                 Spacer()
             } else {
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                        ForEach(studio.history) { record in
-                            HistoryThumb(record: record, selected: record.id == studio.selected?.id)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: columns), spacing: 8) {
+                            ForEach(studio.history) { record in
+                                HistoryThumb(record: record, selected: record.id == studio.selected?.id) { focused = true }
+                                    .id(record.id)
+                            }
                         }
+                        .padding(.horizontal, 12).padding(.bottom, 12)
                     }
-                    .padding(.horizontal, 12).padding(.bottom, 12)
+                    .scrollIndicators(.hidden)
+                    // Arrow keys move the selection (← → by one, ↑ ↓ by a row) once the grid has focus.
+                    .focusable()
+                    .focusEffectDisabled()
+                    .focused($focused)
+                    .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
+                        let step: Int = switch press.key {
+                        case .leftArrow: -1
+                        case .rightArrow: 1
+                        case .upArrow: -columns
+                        default: columns
+                        }
+                        move(by: step, proxy: proxy)
+                        return .handled
+                    }
                 }
-                .scrollIndicators(.hidden)
             }
         }
+    }
+
+    private func move(by step: Int, proxy: ScrollViewProxy) {
+        let items = studio.history
+        guard !items.isEmpty else { return }
+        let current = items.firstIndex { $0.id == studio.selected?.id } ?? 0
+        let next = min(max(current + step, 0), items.count - 1)
+        guard next != current || studio.selectedID == nil else { return }
+        studio.selectedID = items[next].id
+        withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(items[next].id) }
     }
 }
 
 struct HistoryThumb: View {
     let record: ImageRecord
     let selected: Bool
+    /// Called on click (the grid takes keyboard focus).
+    var onSelect: () -> Void = {}
     @State private var hover = false
     private var studio: ImageStudio { AppServices.shared.images }
 
@@ -1039,7 +1106,7 @@ struct HistoryThumb: View {
             .strokeBorder(selected ? LX.C.accent.opacity(0.85) : Color.white.opacity(hover ? 0.2 : 0.06), lineWidth: selected ? 2 : 1))
         .scaleEffect(hover ? 1.02 : 1)
         .contentShape(Rectangle())
-        .onTapGesture { studio.selectedID = record.id }
+        .onTapGesture { studio.selectedID = record.id; onSelect() }
         .onHover { h in withAnimation(LX.M.hover) { hover = h } }
         .help(record.prompt)
         .contextMenu {

@@ -1,5 +1,8 @@
 import Foundation
 import LayXCore
+#if canImport(LayXMLX)
+import LayXMLX
+#endif
 
 /// MainActor state for the Models screen and every model picker (Chat, Mini Chat, Settings).
 /// Wraps `ModelStore` (disk), `ModelDownloader` (network) and the shared `InferenceCoordinator` (memory).
@@ -20,6 +23,8 @@ final class ModelLibrary {
     private(set) var storageFree: Int64 = 0
     /// Most recent user-visible error or confirmation (shown as a toast).
     var notice: String?
+    /// Name of the checkpoint being imported as an image model (nil when idle).
+    private(set) var importingCheckpoint: String?
 
     private(set) var store: ModelStore
     @ObservationIgnored private var downloader: ModelDownloader
@@ -241,6 +246,50 @@ final class ModelLibrary {
             notice = (error as? LocalizedError)?.errorDescription ?? "The model couldn’t be deleted."
         }
         refresh()
+    }
+
+    // MARK: Import
+
+    /// Imports a single-file SDXL checkpoint (.safetensors from Civitai, ComfyUI, A1111…) as an image model
+    /// "local/<name>". Tokenizers and configs come from an installed SDXL model; the original file is untouched.
+    /// Returns the new model's id when it worked.
+    @discardableResult
+    func importCheckpoint(_ file: URL) async -> ModelRepoID? {
+        guard importingCheckpoint == nil else { return nil }
+        guard let template = imageModels.first(where: { ImageFamily(modelType: $0.manifest.modelType) == .sdxl }) else {
+            notice = "Download any SDXL model first (e.g. DreamShaper XL Turbo) — its tokenizer is needed to import a checkpoint."
+            return nil
+        }
+        let stem = file.deletingPathExtension().lastPathComponent
+        var name = String(stem.unicodeScalars.map { c in
+            c.isASCII && (CharacterSet.alphanumerics.contains(c) || c == "-" || c == "_" || c == ".") ? Character(c) : "-"
+        }).trimmingCharacters(in: CharacterSet(charactersIn: "-."))
+        if name.isEmpty { name = "checkpoint" }
+        guard let id = ModelRepoID("local/\(String(name.prefix(80)))") else { notice = "That file name can’t be used."; return nil }
+        if store.installedModel(id) != nil { notice = "\(stem) is already imported."; return nil }
+        let output = store.directory(for: id)
+        importingCheckpoint = stem
+        defer { importingCheckpoint = nil }
+        #if canImport(LayXMLX)
+        let templateDir = template.directory
+        let store = self.store
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try ImageModelImport.sdxlCheckpoint(file, template: templateDir, to: output)
+                try store.registerLocalModel(id, modelType: ImageFamily.sdxl.rawValue, kind: .image)
+            }.value
+            refresh()
+            notice = "Imported \(stem). Choose it in Image."
+            return id
+        } catch {
+            try? FileManager.default.removeItem(at: output)
+            notice = (error as? LocalizedError)?.errorDescription ?? "The checkpoint couldn’t be imported."
+            return nil
+        }
+        #else
+        notice = "Importing needs the MLX engine."
+        return nil
+        #endif
     }
 
     func lastUsed(_ id: ModelRepoID) -> Date? {
