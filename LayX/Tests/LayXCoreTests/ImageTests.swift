@@ -51,7 +51,7 @@ actor ScriptedImageEngine: ImageEngine {
                             if let probe = self.probe { await self.recordProbe(await probe()) }
                             c.yield(.progress(index: i, step: step, total: request.steps))
                         }
-                        c.yield(.image(index: i, png: Data("PNG\(request.seed &+ UInt64(i))".utf8), seed: request.seed &+ UInt64(i)))
+                        c.yield(.image(index: i, png: Data("PNG\(request.seed(at: i))".utf8), seed: request.seed(at: i)))
                     }
                     c.finish()
                 } catch {
@@ -452,6 +452,29 @@ struct ImageStudioTests {
         #expect(await engine.lastLoRAs.map(\.url.lastPathComponent) == ["qwen.safetensors"])
         #expect(studio.notice?.contains("96 layers") == true)
         #expect(studio.history.first?.loras == "qwen ×1.5")
+    }
+
+    @Test func randomSeedsAndBackgroundRuns() async throws {
+        let (studio, dir) = try makeStudio(engine: ScriptedImageEngine(stepDelay: .milliseconds(15)),
+                                           coordinator: InferenceCoordinator(engine: ScriptedEngine()), free: { .max })
+        defer { try? FileManager.default.removeItem(at: dir) }
+        studio.generate(ImageRequest(prompt: "first", steps: 1, seed: 1), spec: .sdxlTurbo)
+        try await waitIdle(studio)
+        let earlier = try #require(studio.history.first)
+        // Random seeds: the first is the given seed, the rest differ from seed+1, …
+        var request = ImageRequest(prompt: "p", steps: 3, seed: 100, count: 3)
+        request.seeds = [100, 7, 9]
+        studio.generate(request, spec: .sdxlTurbo)
+        #expect(studio.watchingProgress && studio.runCount == 3)
+        // Picking a history image while it runs: the run continues, the choice stays on screen.
+        try await Task.sleep(for: .milliseconds(30))
+        studio.select(earlier.id)
+        #expect(!studio.watchingProgress)
+        try await waitIdle(studio)
+        #expect(studio.selectedID == earlier.id)
+        #expect(Set(studio.history.prefix(3).map(\.seed)) == [100, 7, 9])
+        #expect(studio.runCount == 0 && !studio.watchingProgress)
+        #expect(ImageRequest.randomSeeds(first: 5, count: 4).count == 4 && ImageRequest.randomSeeds(first: 5, count: 4).first == 5)
     }
 
     @Test func releasesImageModelForTextModel() async throws {

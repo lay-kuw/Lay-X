@@ -7,7 +7,13 @@ import LayXCore
 private struct GlassTransparencyKey: EnvironmentKey { static let defaultValue: Double = LX.Glass.defaultValue }
 private struct GlowPresetKey: EnvironmentKey { static let defaultValue: LX.Glow = .violet }
 private struct FullGlassKey: EnvironmentKey { static let defaultValue = false }
+private struct SeamlessKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
+    /// Settings → Appearance → Seamless layout: sidebar and main area without frames, split by a hairline.
+    var seamless: Bool {
+        get { self[SeamlessKey.self] }
+        set { self[SeamlessKey.self] = newValue }
+    }
     /// Settings → Appearance → Full glass: the whole window (content panes, cards) becomes translucent.
     var fullGlass: Bool {
         get { self[FullGlassKey.self] }
@@ -46,6 +52,17 @@ struct VisualEffectBlur: NSViewRepresentable {
 }
 
 /// Window backdrop: wallpaper blur + base + two glows (deep violet top-left, faint lavender bottom-right).
+/// Vertical hairline between the sidebar, main area and inspector in the seamless layout: brightest in the
+/// middle, fading out at the ends.
+struct LayoutHairline: View {
+    var body: some View {
+        LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: Color.white.opacity(0.10), location: 0.12),
+                               .init(color: Color.white.opacity(0.10), location: 0.88), .init(color: .clear, location: 1)],
+                       startPoint: .top, endPoint: .bottom)
+            .frame(width: 1)
+    }
+}
+
 struct Backdrop: View {
     @Environment(\.glassTransparency) private var t
     @Environment(\.glowPreset) private var glow
@@ -72,10 +89,24 @@ struct PaneBackground: ViewModifier {
     var radius: CGFloat = LX.R.xl
     var tint: Color = LX.C.pane
     var shadow: Bool = true
+    /// A window-layout pane (sidebar, main area, inspector): frameless in the seamless layout.
+    var layout = false
     @Environment(\.glassTransparency) private var t
     @Environment(\.fullGlass) private var fullGlass
+    @Environment(\.seamless) private var seamless
 
-    func body(content: Content) -> some View {
+    @ViewBuilder func body(content: Content) -> some View {
+        if layout && seamless {
+            // Full-bleed tint only: no rounding, edge, highlight or shadow — the hairline between areas does the work.
+            content.background {
+                Rectangle().fill(tint.opacity(LX.Glass.tintScale(t) * (fullGlass ? LX.Glass.fullGlassPaneScale : 1) * 0.6))
+            }
+        } else {
+            framed(content)
+        }
+    }
+
+    private func framed(_ content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         return content
             .background {
@@ -136,8 +167,8 @@ struct AccentGlass: ViewModifier {
 }
 
 extension View {
-    func pane(radius: CGFloat = LX.R.xl, tint: Color = LX.C.pane, shadow: Bool = true) -> some View {
-        modifier(PaneBackground(radius: radius, tint: tint, shadow: shadow))
+    func pane(radius: CGFloat = LX.R.xl, tint: Color = LX.C.pane, shadow: Bool = true, layout: Bool = false) -> some View {
+        modifier(PaneBackground(radius: radius, tint: tint, shadow: shadow, layout: layout))
     }
     func well(radius: CGFloat = LX.R.lg, fill: Color = LX.C.well) -> some View {
         modifier(WellBackground(radius: radius, fill: fill))

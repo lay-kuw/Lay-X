@@ -6,6 +6,7 @@ enum ImagePreferences {
     static let keepLoadedKey = "lx.image.keepLoadedMinutes"      // 0 = unload after each run, -1 = until quit
     static let makeRoomKey = "lx.image.makeRoom"                 // unload an idle chat model when memory is short
     static let countKey = "lx.image.count"
+    static let seedModeKey = "lx.image.seedMode"
     static let paramsKey = "lx.image.params"                     // per-model steps / CFG / size
     static let lorasKey = "lx.image.activeLoRAs"
 

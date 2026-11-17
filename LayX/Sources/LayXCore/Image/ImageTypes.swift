@@ -111,6 +111,30 @@ public enum ImageFamily: String, Sendable, Hashable, Codable, CaseIterable {
     }
 }
 
+/// What a model is good at (Models → Image → Discover groups the curated models by these).
+public enum ImagePurpose: String, Sendable, Hashable, CaseIterable, Identifiable {
+    case general, photo, anime, text, fast
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .general: "All-round"
+        case .photo: "Photoreal"
+        case .anime: "Anime & art"
+        case .text: "Text & design"
+        case .fast: "Fast"
+        }
+    }
+    public var symbol: String {
+        switch self {
+        case .general: "sparkles"
+        case .photo: "camera"
+        case .anime: "paintbrush.pointed"
+        case .text: "textformat"
+        case .fast: "bolt"
+        }
+    }
+}
+
 /// An image model Lay X can run (downloaded once in diffusers layout, then offline).
 public struct ImageModelSpec: Sendable, Hashable, Identifiable {
     public var id: ModelRepoID
@@ -234,6 +258,22 @@ public struct ImageModelSpec: Sendable, Hashable, Identifiable {
         .dreamShaperTurbo, .flux2Klein, .qwenImageFlash, .sdxlBase, .realVis, .juggernaut, .animagine,
         .flux2KleinBase, .qwenImage2512, .sdxlTurbo,
     ]
+
+    /// Purposes of the curated models; others get their family's typical use.
+    public var purposes: [ImagePurpose] {
+        switch id.description {
+        case Self.dreamShaperTurbo.id.description: [.general, .fast]
+        case Self.flux2Klein.id.description: [.general, .fast, .text]
+        case Self.qwenImageFlash.id.description: [.text, .general, .fast]
+        case Self.sdxlBase.id.description: [.general]
+        case Self.realVis.id.description, Self.juggernaut.id.description: [.photo]
+        case Self.animagine.id.description: [.anime]
+        case Self.flux2KleinBase.id.description: [.general, .text]
+        case Self.qwenImage2512.id.description: [.text, .photo]
+        case Self.sdxlTurbo.id.description: [.fast]
+        default: family == .qwenImage ? [.text] : [.general]
+        }
+    }
 
     public static func spec(_ id: String) -> ImageModelSpec? { catalog.first { $0.id.description == id } }
 
@@ -372,6 +412,19 @@ public struct ImageRequest: Sendable, Hashable {
     /// (0 = keep, 1 = ignore the source).
     public var source: Data?
     public var strength: Double
+    /// Seed of each image when they aren't consecutive (random per image); nil = seed, seed+1, …
+    public var seeds: [UInt64]?
+
+    /// Seed of image `index` of the batch.
+    public func seed(at index: Int) -> UInt64 {
+        if let seeds, index < seeds.count { return seeds[index] }
+        return seed &+ UInt64(index)
+    }
+
+    /// Seeds for `count` images: the first is `seed`, the others random.
+    public static func randomSeeds(first seed: UInt64, count: Int) -> [UInt64] {
+        [seed] + (1..<max(count, 1)).map { _ in randomSeed() }
+    }
 
     /// Denoising steps actually run (image to image skips the first part of the schedule).
     public var effectiveSteps: Int { source == nil ? steps : max(1, Int(Double(steps) * strength)) }

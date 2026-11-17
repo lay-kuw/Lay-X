@@ -76,6 +76,7 @@ enum LX {
         static let fullGlassPaneScale = 0.3
         static let fullGlassWellScale = 0.45
         static let fullGlassKey = "lx.fullGlass"
+        static let seamlessKey = "lx.seamlessLayout"
         /// Opacity of the dark base over the wallpaper blur.
         static func baseOpacity(_ t: Double) -> Double { 0.97 - 0.17 * t - 0.5 * t * t }
     }

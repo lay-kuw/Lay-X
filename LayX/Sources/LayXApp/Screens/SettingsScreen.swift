@@ -28,7 +28,7 @@ struct SettingsScreen: View {
             case .web: ["web", "search", "internet", "brave", "duckduckgo", "searxng", "globe", "sources"]
             case .image: ["image", "picture", "sdxl", "flux", "qwen", "stable diffusion", "generate", "art", "memory"]
             case .api: ["server", "port", "lan", "network", "key", "openai"]
-            case .appearance: ["glow", "glass", "transparency", "color", "theme"]
+            case .appearance: ["glow", "glass", "transparency", "color", "theme", "layout", "seamless", "frame", "border"]
             case .shortcuts: ["keyboard", "hotkey", "shortcut"]
             case .advanced: ["reset", "cache", "downloads", "logs", "about", "version"]
             }
@@ -47,6 +47,7 @@ struct SettingsScreen: View {
     @AppStorage(LX.Glow.storageKey) private var glowRaw = LX.Glow.violet.rawValue
     @AppStorage(AppearancePreferences.followReduceTransparencyKey) private var followSystem = true
     @AppStorage(LX.Glass.fullGlassKey) private var fullGlass = false
+    @AppStorage(LX.Glass.seamlessKey) private var seamless = false
     @AppStorage(EnginePreferences.keepLoadedKey) private var keepLoaded = 15
     @AppStorage(EnginePreferences.memoryLimitKey) private var memoryLimitGB = 0.0
     @AppStorage(EnginePreferences.kvBitsKey) private var kvBits = 0
@@ -103,6 +104,11 @@ struct SettingsScreen: View {
                     glowPicker
                 }
             }
+            group("Layout") {
+                row("Seamless layout", "No frames around the sidebar and main area — one surface split by a fine line") {
+                    Toggle("", isOn: $seamless).toggleStyle(LXToggleStyle()).labelsHidden().fixedSize()
+                }
+            }
             group("Glass") {
                 row("Transparency", "How much of the wallpaper shows through the window, panes and Mini Chat") {
                     GradientSlider(value: $transparency, range: 0...1) { "\(Int(($0 * 100).rounded()))%" }
@@ -116,6 +122,7 @@ struct SettingsScreen: View {
                             transparency = LX.Glass.defaultValue
                             glowRaw = LX.Glow.violet.rawValue
                             fullGlass = false
+                            seamless = false
                         }
                     }
                 }

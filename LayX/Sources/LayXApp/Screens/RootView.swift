@@ -9,30 +9,38 @@ struct RootView: View {
     @AppStorage(LX.Glass.fullGlassKey) private var fullGlass = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage(LX.Glow.storageKey) private var glowRaw = LX.Glow.violet.rawValue
+    @AppStorage(LX.Glass.seamlessKey) private var seamless = false
 
     var body: some View {
         ZStack {
             Backdrop()
-            HStack(spacing: LX.S.s2) {
+            HStack(spacing: seamless ? 0 : LX.S.s2) {
                 Sidebar()
-                    .frame(width: LX.S.sidebar)
+                    .frame(width: LX.S.sidebar + (seamless ? LX.S.s2 : 0))
                     .overlay { panelDismissCatcher }
+                if seamless { LayoutHairline() }
                 content
+                    // Seamless: the area reaches the window edges; its content keeps the framed layout's top inset.
+                    .padding(.top, seamless ? LX.S.s2 : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .pane(radius: LX.R.xl, tint: LX.C.content)
+                    .pane(radius: LX.R.xl, tint: LX.C.content, layout: true)
                 if state.inspector && state.screen == .chat {
+                    if seamless { LayoutHairline() }
                     InspectorPanel()
+                        .padding(.top, seamless ? LX.S.s2 : 0)
                         .frame(width: 288)
-                        .pane(radius: LX.R.xl)
+                        .pane(radius: LX.R.xl, layout: true)
                         .overlay { panelDismissCatcher }
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
-            .padding(LX.S.s2)
+            .padding(seamless ? 0 : LX.S.s2)
         }
         .foregroundStyle(LX.C.primary)
         .environment(\.glassTransparency, followReduce && reduceTransparency ? 0 : transparency)
         .environment(\.fullGlass, fullGlass && !(followReduce && reduceTransparency))
+        .environment(\.seamless, seamless)
+        .animation(LX.M.panel, value: seamless)
         .environment(\.glowPreset, LX.Glow(rawValue: glowRaw) ?? .violet)
         .animation(.easeInOut(duration: 0.35), value: glowRaw)
         .onChange(of: state.screen) { _, _ in state.modelPanelOpen = false }
@@ -66,6 +74,7 @@ struct RootView: View {
 
 struct Sidebar: View {
     @EnvironmentObject var state: AppState
+    @Environment(\.seamless) private var seamless
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -95,7 +104,9 @@ struct Sidebar: View {
         }
         .padding(.horizontal, 8)
         .padding(.bottom, 8)
-        .pane()
+        // Seamless: the window has no outer margin, so the sidebar adds it (traffic lights keep their place).
+        .padding([.leading, .vertical], seamless ? LX.S.s2 : 0)
+        .pane(layout: true)
     }
 
     @ViewBuilder private var contextual: some View {

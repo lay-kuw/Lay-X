@@ -15,29 +15,36 @@ struct ImageModelsPane: View {
     @State private var hubNext: URL?
     @State private var hubLoading = false
     @State private var hubError: String?
-    /// Architecture browsed on Hugging Face (one pipeline filter at a time).
-    @State private var hubFamily: ImageFamily = .sdxl
+    /// Architecture browsed on Hugging Face (nil = every supported one).
+    @State private var hubFamily: ImageFamily? = nil
+    /// Family of each Hub result (known from the pipeline filter that found it).
+    @State private var hubFamilies: [ModelRepoID: ImageFamily] = [:]
+    /// Curated models shown in Discover (nil = all).
+    @State private var purpose: ImagePurpose? = nil
+    @State private var confirmDeleteLoRA: LoRALibrary.Info?
     private var library: ModelLibrary { AppServices.shared.models }
     private var studio: ImageStudio { AppServices.shared.images }
 
     private var catalog: [ImageModelSpec] {
         let q = filter.trimmingCharacters(in: .whitespaces)
-        return q.isEmpty ? ImageModelSpec.catalog : ImageModelSpec.catalog.filter {
-            $0.name.localizedCaseInsensitiveContains(q) || $0.style.localizedCaseInsensitiveContains(q) || $0.id.description.localizedCaseInsensitiveContains(q)
+        return ImageModelSpec.catalog.filter { spec in
+            (purpose.map { spec.purposes.contains($0) } ?? true)
+                && (q.isEmpty || spec.name.localizedCaseInsensitiveContains(q) || spec.style.localizedCaseInsensitiveContains(q)
+                    || spec.id.description.localizedCaseInsensitiveContains(q) || spec.family.displayName.localizedCaseInsensitiveContains(q))
         }
     }
 
-    /// Installed models use their recorded family; Hub results the family being browsed.
+    /// Installed models use their recorded family; Hub results the family whose filter found them.
     private func spec(_ id: ModelRepoID) -> ImageModelSpec {
         if let m = library.imageModels.first(where: { $0.id == id }) { return ImageModelSpec.spec(for: m) }
-        return ImageModelSpec.spec(for: id, family: hubFamily)
+        return ImageModelSpec.spec(for: id, family: hubFamilies[id] ?? hubFamily ?? .sdxl)
     }
 
     var body: some View {
         HStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if tab == .installed { installed; importRow } else { discover }
+                    if tab == .installed { installed; importRow; loraSection } else { discover }
                     ForEach(library.activeDownloads.filter { d in ImageModelSpec.spec(d.id.description) != nil || hubResults.contains { $0.id == d.id } }, id: \.id) { d in
                         HStack(spacing: 10) {
                             Image(systemName: "arrow.down.circle.fill").foregroundStyle(LX.C.liveCyan)
@@ -135,28 +142,29 @@ struct ImageModelsPane: View {
     // MARK: Discover
 
     private var discover: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(spacing: 0) {
-                header(["Image model", "Style", "Download", "Status"])
+        VStack(alignment: .leading, spacing: 12) {
+            // Curated models by what they're good at; each card says which kind of model it is.
+            HStack(spacing: 6) {
+                PurposeChip(title: "All", symbol: "square.grid.2x2", on: purpose == nil) { purpose = nil }
+                ForEach(ImagePurpose.allCases) { p in
+                    PurposeChip(title: p.title, symbol: p.symbol, on: purpose == p) { purpose = purpose == p ? nil : p }
+                }
+                Spacer(minLength: 0)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 10)], spacing: 10) {
                 ForEach(catalog) { spec in
-                    let id = spec.id.description
-                    row(selected: selection == id) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(spec.name).font(LX.F.ui(12.5, .medium)).lineLimit(1)
-                            Text(spec.summary).font(LX.F.ui(11)).foregroundStyle(LX.C.tertiary).lineLimit(1)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(spec.style).font(LX.F.ui(12)).foregroundStyle(LX.C.secondary).frame(width: 140, alignment: .leading)
-                        Text(ModelDisplay.bytes(spec.downloadBytes)).font(LX.F.mono(12)).frame(width: 80, alignment: .trailing)
-                        status(spec).frame(width: 90, alignment: .trailing)
+                    ImageModelCard(spec: spec, selected: selection == spec.id.description) {
+                        status(spec)
                     }
-                    .onTapGesture { selection = id }
+                    .onTapGesture { selection = spec.id.description }
                 }
             }
-            .well().clipShape(RoundedRectangle(cornerRadius: LX.R.lg))
-            hubSection
+            if catalog.isEmpty {
+                Text("No picks match — try the Hugging Face list below.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary)
+            }
+            hubSection.padding(.top, 8)
         }
-        .task(id: "\(filter)|\(hubSort.rawValue)|\(hubFamily.rawValue)") {
+        .task(id: "\(filter)|\(hubSort.rawValue)|\(hubFamily?.rawValue ?? "all")") {
             try? await Task.sleep(for: .milliseconds(350))   // debounce typing
             guard !Task.isCancelled else { return }
             await searchHub(reset: true)
@@ -175,29 +183,30 @@ struct ImageModelsPane: View {
                           selection: $hubSort)
             }
             HStack(spacing: 10) {
-                Segmented(options: [(ImageFamily.sdxl, "SDXL"), (.flux2Klein, "FLUX.2 klein"), (.qwenImage, "Qwen-Image")],
+                Segmented(options: [(ImageFamily?.none, "All supported"), (.sdxl, "SDXL"), (.flux2Klein, "FLUX.2 klein"), (.qwenImage, "Qwen-Image")],
                           selection: $hubFamily)
                     .fixedSize()
                 Spacer()
             }
-            if hubFamily != .sdxl {
-                Text(hubFamily == .qwenImage
-                     ? "Qwen-Image models in bf16 (or Lay X’s 8-bit layout). Pre-quantized repos (bnb, SDNQ, Nunchaku) and Edit models aren’t supported."
-                     : "FLUX.2 klein 4B in bf16 — distilled (4 steps) and base (with guidance). 9B models and pre-quantized repos aren’t supported.")
-                    .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
-            }
+            Text(hubFamily == nil
+                 ? "Every diffusers pipeline Lay X can run. Single-file checkpoints (Civitai) go through Installed → Import Model File…"
+                 : hubFamily == .qwenImage
+                 ? "Qwen-Image models in bf16 (or Lay X’s 8-bit layout). Pre-quantized repos (bnb, SDNQ, Nunchaku) and Edit models aren’t supported."
+                 : hubFamily == .sdxl ? "SDXL checkpoints in diffusers format — Pony, Illustrious, NoobAI and more."
+                 : "FLUX.2 klein 4B in bf16 — distilled (4 steps) and base (with guidance). 9B models and pre-quantized repos aren’t supported.")
+                .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
             VStack(spacing: 0) {
-                header(["Model", "Author", "Downloads", "Status"])
+                header(["Model", "Type", "Downloads", "Status"])
                 ForEach(hubResults.filter { r in !ImageModelSpec.catalog.contains { $0.id == r.id } }) { r in
                     let id = r.id.description
                     row(selected: selection == id) {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(r.id.name).font(LX.F.ui(12.5, .medium)).lineLimit(1)
-                            Text("\(r.likes.formatted(.number.notation(.compactName))) likes · \(ModelDisplay.age(r.lastModified))")
+                            Text("\(r.id.owner) · \(r.likes.formatted(.number.notation(.compactName))) likes · \(ModelDisplay.age(r.lastModified))")
                                 .font(LX.F.ui(11)).foregroundStyle(LX.C.tertiary).lineLimit(1)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(r.id.owner).font(LX.F.ui(12)).foregroundStyle(LX.C.secondary).lineLimit(1).frame(width: 140, alignment: .leading)
+                        FamilyBadge(family: spec(r.id).family).frame(width: 140, alignment: .leading)
                         Text(r.downloads.formatted(.number.notation(.compactName))).font(LX.F.mono(12)).frame(width: 80, alignment: .trailing)
                         hubStatus(r.id).frame(width: 90, alignment: .trailing)
                     }
@@ -206,7 +215,7 @@ struct ImageModelsPane: View {
                 if let hubError {
                     Text(hubError).font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary).padding(.horizontal, 12).frame(height: LX.S.tableRow)
                 } else if hubResults.isEmpty && !hubLoading {
-                    Text(filter.isEmpty ? "No results." : "No \(hubFamily.displayName) models found for “\(filter)”.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary)
+                    Text(filter.isEmpty ? "No results." : "No \(hubFamily?.displayName ?? "supported") models found for “\(filter)”.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).frame(height: LX.S.tableRow)
                 }
             }
@@ -241,16 +250,42 @@ struct ImageModelsPane: View {
         defer { hubLoading = false }
         do {
             let hub = HubAPI()
-            let page: HubAPI.Page
-            if !reset, let next = hubNext {
-                page = try await hub.page(at: next)
+            let q = filter.trimmingCharacters(in: .whitespaces)
+            let query = ModelRepoID(q) != nil ? "" : q
+            let author = ModelRepoID(q)?.owner
+            if !reset, let next = hubNext, let family = hubFamily {
+                let page = try await hub.page(at: next)
+                for r in page.results { hubFamilies[r.id] = family }
+                hubResults += page.results
+                hubNext = page.next
+            } else if let family = hubFamily {
+                let page = try await hub.searchPage(query, author: author, sort: hubSort, limit: 40, filter: family.hubFilter)
+                for r in page.results { hubFamilies[r.id] = family }
+                hubResults = page.results
+                hubNext = page.next
             } else {
-                let q = filter.trimmingCharacters(in: .whitespaces)
-                page = try await hub.searchPage(ModelRepoID(q) != nil ? "" : q, author: ModelRepoID(q)?.owner, sort: hubSort,
-                                                limit: 40, filter: hubFamily.hubFilter)
+                // Every supported architecture: one query each, merged in the chosen order.
+                let families: [ImageFamily] = [.sdxl, .flux2Klein, .qwenImage]
+                var merged: [HubModelSummary] = []
+                try await withThrowingTaskGroup(of: (ImageFamily, [HubModelSummary]).self) { group in
+                    for family in families {
+                        group.addTask { (family, try await hub.searchPage(query, author: author, sort: hubSort, limit: 20, filter: family.hubFilter).results) }
+                    }
+                    for try await (family, results) in group {
+                        for r in results { hubFamilies[r.id] = family }
+                        merged += results
+                    }
+                }
+                hubResults = merged.sorted { a, b in
+                    switch hubSort {
+                    case .likes: a.likes > b.likes
+                    case .updated: (a.lastModified ?? .distantPast) > (b.lastModified ?? .distantPast)
+                    case .trending: a.trendingScore != b.trendingScore ? a.trendingScore > b.trendingScore : a.downloads > b.downloads
+                    default: a.downloads > b.downloads
+                    }
+                }
+                hubNext = nil
             }
-            hubResults = reset ? page.results : hubResults + page.results
-            hubNext = page.next
             hubError = nil
         } catch {
             hubError = "Hugging Face couldn’t be reached (\((error as? LocalizedError)?.errorDescription ?? "offline")). Downloaded models keep working."
@@ -272,7 +307,10 @@ struct ImageModelsPane: View {
 
     @ViewBuilder private var details: some View {
         let id = selection.flatMap(ModelRepoID.init)
-        if let id {
+        if let file = selection.flatMap({ $0.hasPrefix("lora:") ? String($0.dropFirst(5)) : nil }),
+           let info = studio.loraLibrary.first(where: { $0.file == file }) {
+            loraDetails(info)
+        } else if let id {
             let spec = spec(id)
             let installed = library.imageModels.first { $0.id == id }
             ScrollView {
@@ -284,6 +322,7 @@ struct ImageModelsPane: View {
                     Text(spec.summary).font(LX.F.body).foregroundStyle(LX.C.body).fixedSize(horizontal: false, vertical: true)
                     VStack(alignment: .leading, spacing: 6) {
                         kv("Type", spec.family.displayName)
+                        kv("Good at", spec.purposes.map(\.title).joined(separator: " · "))
                         kv("Style", spec.style)
                         kv("Publisher", spec.publisher)
                         kv("Default", "\(spec.defaultSize.label) · \(spec.defaultSteps) steps · " + (spec.usesGuidance
@@ -325,6 +364,132 @@ struct ImageModelsPane: View {
             }
         } else {
             Text("Select a model").font(LX.F.body).foregroundStyle(LX.C.tertiary).frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // MARK: LoRA
+
+    private var loraSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                SectionLabel(text: "LoRA", trailing: studio.loraLibrary.isEmpty ? nil : "\(studio.loraLibrary.count)").fixedSize()
+                Spacer()
+                if let folder = studio.loraFolder {
+                    IconButton(symbol: "folder", help: "Show the LoRA folder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
+                }
+                LXButton(title: "Add LoRA…", symbol: "plus") { addLoRAs() }
+            }
+            .padding(.top, 10)
+            VStack(spacing: 0) {
+                header(["LoRA", "Made for", "Size", "Status"])
+                ForEach(studio.loraLibrary) { info in
+                    let key = "lora:\(info.file)"
+                    let on = studio.activeLoRAs.contains { $0.file == info.file && $0.scale != 0 }
+                    row(selected: selection == key) {
+                        HStack(spacing: 9) {
+                            Image(systemName: "puzzlepiece.extension").font(.system(size: 11)).foregroundStyle(on ? LX.C.accentText : LX.C.tertiary)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(info.name).font(LX.F.ui(12.5, .medium)).lineLimit(1).truncationMode(.middle)
+                                if !info.triggerWords.isEmpty {
+                                    Text("Trigger: \(info.triggerWords.joined(separator: ", "))").font(LX.F.ui(11)).foregroundStyle(LX.C.tertiary).lineLimit(1)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(Self.loraBase(info)).font(LX.F.ui(12)).foregroundStyle(Self.loraUsable(info) ? LX.C.secondary : LX.C.warn)
+                            .lineLimit(1).frame(width: 140, alignment: .leading)
+                        Text(ModelDisplay.bytes(info.bytes)).font(LX.F.mono(12)).frame(width: 80, alignment: .trailing)
+                        Text(on ? "On" : "—").font(LX.F.ui(11)).foregroundStyle(on ? LX.C.ok : LX.C.tertiary).frame(width: 90, alignment: .trailing)
+                    }
+                    .onTapGesture { selection = key }
+                }
+                if studio.loraLibrary.isEmpty {
+                    Text("No LoRAs yet. Add .safetensors files for SDXL, FLUX.2 klein 4B or Qwen-Image.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).frame(height: LX.S.tableRow)
+                }
+            }
+            .well().clipShape(RoundedRectangle(cornerRadius: LX.R.lg))
+        }
+        .onAppear { studio.refreshLoRAs() }
+    }
+
+    static func loraBase(_ info: LoRALibrary.Info) -> String {
+        switch info.fit {
+        case .fits(let base): base.displayName
+        case .otherBase(let base): base + " (not supported)"
+        case .fullModel: "Full model — import it"
+        case .unknown: "Unknown"
+        }
+    }
+
+    static func loraUsable(_ info: LoRALibrary.Info) -> Bool {
+        switch info.fit {
+        case .fits, .unknown: true
+        case .otherBase, .fullModel: false
+        }
+    }
+
+    private func addLoRAs() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "safetensors") ?? .data]
+        panel.allowsMultipleSelection = true
+        panel.message = "Choose LoRA files (.safetensors) for SDXL, FLUX.2 klein 4B or Qwen-Image. They are copied into Lay X."
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls { studio.importLoRA(url) }
+        if let last = panel.urls.last { selection = "lora:\(last.lastPathComponent)" }
+    }
+
+    @ViewBuilder private func loraDetails(_ info: LoRALibrary.Info) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(info.name).font(LX.F.ui(16, .semibold)).lineLimit(2)
+                    Text(info.file).font(LX.F.mono(11)).foregroundStyle(LX.C.tertiary).textSelection(.enabled)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    kv("Made for", Self.loraBase(info))
+                    if let base = info.baseModel { kv("Trained on", base) }
+                    kv("Size", ModelDisplay.bytes(info.bytes))
+                    kv("Trigger", info.triggerWords.isEmpty ? "—" : info.triggerWords.joined(separator: ", "))
+                }
+                if info.fit == .fullModel {
+                    Text("This file is a whole model, not a LoRA. Import it as an image model; the copy here can then be deleted.")
+                        .font(LX.F.caption).foregroundStyle(LX.C.warn).fixedSize(horizontal: false, vertical: true)
+                    if let folder = studio.loraFolder {
+                        LXButton(title: "Import as Image Model", symbol: "square.and.arrow.down", kind: .primary) {
+                            Task {
+                                if let id = await library.importCheckpoint(folder.appendingPathComponent(info.file)) {
+                                    studio.deleteLoRA(info.file)
+                                    selection = id.description
+                                }
+                            }
+                        }
+                        .disabled(library.importingCheckpoint != nil)
+                    }
+                } else {
+                    Text("Switch it on and set its strength in Image → LoRA. Models it wasn’t made for show it greyed out.")
+                        .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 8) {
+                    if let folder = studio.loraFolder {
+                        IconButton(symbol: "magnifyingglass", help: "Show in Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([folder.appendingPathComponent(info.file)])
+                        }
+                    }
+                    IconButton(symbol: "trash", help: "Delete LoRA") { confirmDeleteLoRA = info }
+                }
+            }
+            .padding(16)
+        }
+        .confirmationDialog("Delete \(confirmDeleteLoRA?.name ?? "LoRA")?",
+                            isPresented: Binding(get: { confirmDeleteLoRA != nil }, set: { if !$0 { confirmDeleteLoRA = nil } }),
+                            presenting: confirmDeleteLoRA) { lora in
+            Button("Delete \(ModelDisplay.bytes(lora.bytes))", role: .destructive) {
+                studio.deleteLoRA(lora.file)
+                selection = nil
+            }
+        } message: { _ in
+            Text("Lay X’s copy of the LoRA is removed. The file you added it from stays where it was.")
         }
     }
 
@@ -378,5 +543,84 @@ struct ImageModelsPane: View {
             Text(k).font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary).frame(width: 80, alignment: .leading)
             Text(v).font(LX.F.ui(12)).foregroundStyle(LX.C.body).fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// Purpose filter chip (Discover).
+struct PurposeChip: View {
+    let title: String
+    let symbol: String
+    let on: Bool
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
+                Text(title).font(LX.F.ui(12, .medium))
+            }
+            .foregroundStyle(on ? LX.C.onGlass : LX.C.secondary)
+            .padding(.horizontal, 10).frame(height: 26)
+            .background {
+                if on { Capsule().fill(.clear).accentGlass(radius: 13, strength: 0.8) }
+                else { Capsule().fill(Color.white.opacity(hover ? 0.07 : 0.035)) }
+            }
+            .overlay(Capsule().strokeBorder(Color.white.opacity(on ? 0 : 0.07), lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { h in withAnimation(LX.M.hover) { hover = h } }
+    }
+}
+
+/// "SDXL" / "FLUX.2" / "Qwen" badge in the architecture's colour.
+struct FamilyBadge: View {
+    let family: ImageFamily
+    var body: some View {
+        let color: Color = switch family {
+        case .sdxl: LX.C.accentText
+        case .flux2Klein, .flux2KleinBase: LX.C.liveCyan
+        case .qwenImage: LX.C.ok
+        }
+        Text(family.displayName).font(LX.F.mono(10)).foregroundStyle(color)
+            .padding(.horizontal, 6).frame(height: 18)
+            .background(Capsule().fill(color.opacity(0.12)))
+            .fixedSize()
+    }
+}
+
+/// A curated model in Discover: name, kind, what it's for, size and the download control.
+struct ImageModelCard<Status: View>: View {
+    let spec: ImageModelSpec
+    let selected: Bool
+    @ViewBuilder let status: () -> Status
+    @State private var hover = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(spec.name).font(LX.F.ui(13.5, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
+                Spacer(minLength: 4)
+                FamilyBadge(family: spec.family)
+            }
+            Text(spec.summary).font(LX.F.ui(11.5)).foregroundStyle(LX.C.secondary).lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: 30, alignment: .topLeading)
+            HStack(spacing: 6) {
+                ForEach(spec.purposes.prefix(3), id: \.self) { p in
+                    Image(systemName: p.symbol).font(.system(size: 9.5)).foregroundStyle(LX.C.tertiary).help(p.title)
+                }
+                Text("≈ \(ModelDisplay.bytes(spec.downloadBytes))").font(LX.F.mono(10.5)).foregroundStyle(LX.C.tertiary)
+                Spacer(minLength: 4)
+                status()
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous).fill(Color.white.opacity(selected ? 0.07 : hover ? 0.05 : 0.03)))
+        .overlay(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous)
+            .strokeBorder(selected ? LX.C.accent.opacity(0.55) : Color.white.opacity(0.07), lineWidth: 1))
+        .contentShape(Rectangle())
+        .onHover { h in withAnimation(LX.M.hover) { hover = h } }
     }
 }

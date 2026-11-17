@@ -32,6 +32,21 @@ public final class ImageStudio {
     /// LoRAs switched on in the composer, with their strengths.
     public var activeLoRAs: [LoRAChoice] = []
     public var selectedID: UUID?
+    /// The canvas follows the running generation (true when it starts; false once a history image is picked —
+    /// the run carries on in the background).
+    public private(set) var watchingProgress = false
+    /// Images finished / requested in the running batch (0 / 0 when idle).
+    public private(set) var runDone = 0
+    public private(set) var runCount = 0
+
+    /// Shows a history image (a running generation continues in the background).
+    public func select(_ id: UUID) {
+        selectedID = id
+        watchingProgress = false
+    }
+
+    /// Shows the running generation on the canvas.
+    public func watchProgress() { if isBusy { watchingProgress = true } }
     /// Image model chosen in the picker for this session (nothing is chosen at launch).
     public var selectedModelID: String?
     public private(set) var error: String?
@@ -106,6 +121,9 @@ public final class ImageStudio {
 
     // MARK: Generation
 
+    /// Most images one run makes.
+    public static let maxCount = 64
+
     public func generate(_ request: ImageRequest, spec: ImageModelSpec) {
         let prompt = request.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !isBusy else { return }
@@ -113,7 +131,7 @@ public final class ImageStudio {
         req.prompt = prompt
         let family = spec.family
         req.steps = min(max(req.steps, 1), 100)
-        req.count = min(max(req.count, 1), 8)
+        req.count = min(max(req.count, 1), Self.maxCount)
         req.strength = min(max(req.strength, 0.05), 1)
         req.cfg = spec.usesGuidance ? min(max(req.cfg, 0), 20) : 0
         if !spec.usesGuidance { req.negativePrompt = "" }
@@ -133,6 +151,9 @@ public final class ImageStudio {
         notice = nil
         idleTask?.cancel()
         generationCounter += 1
+        watchingProgress = true
+        runDone = 0
+        runCount = req.count
         task = Task { await self.run(req, spec: spec) }
     }
 
@@ -142,6 +163,9 @@ public final class ImageStudio {
         defer {
             phase = .idle
             task = nil
+            watchingProgress = false
+            runDone = 0
+            runCount = 0
             scheduleIdleUnload()
         }
         do {
@@ -183,7 +207,9 @@ public final class ImageStudio {
                     strength: request.source == nil ? 0 : request.strength,
                     duration: elapsed / Double(index + 1), index: index)
                 history.insert(record, at: 0)
-                selectedID = record.id
+                runDone += 1
+                // Only while the canvas follows the run; otherwise the user's choice stays on screen.
+                if watchingProgress { selectedID = record.id }
             } catch {
                 self.error = "The image couldn’t be saved: \(error.localizedDescription)"
             }

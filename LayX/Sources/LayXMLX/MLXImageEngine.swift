@@ -94,7 +94,7 @@ public actor MLXImageEngine: ImageEngine {
             // as it is ready.
             for index in 0..<request.count {
                 try Task.checkCancellation()
-                let seed = request.seed &+ UInt64(index)
+                let seed = request.seed(at: index)
                 let total = request.effectiveSteps
                 continuation.yield(.progress(index: index, step: 0, total: total))
                 let onStep: @Sendable (Int, Int) -> Void = { step, steps in

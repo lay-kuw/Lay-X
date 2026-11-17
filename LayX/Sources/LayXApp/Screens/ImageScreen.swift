@@ -319,6 +319,8 @@ struct NoImageModelCard: View {
 struct ImageComposer: View {
     let spec: ImageModelSpec
     @AppStorage(ImagePreferences.countKey) private var count = 1
+    /// "sequential" (seed, seed+1, …) or "random" (a new seed per image).
+    @AppStorage(ImagePreferences.seedModeKey) private var seedMode = "sequential"
     @State private var params: ImagePreferences.Params
     @State private var showNegative = false
     @State private var showLoRAs = false
@@ -372,8 +374,23 @@ struct ImageComposer: View {
                                       range: spec.cfgRange, marker: spec.defaultCFG)
                     }
                 }
-                setting("Images", count > 1 ? "seed, seed+1, …" : "") {
-                    Segmented(options: (1...8).map { ($0, "\($0)") }, selection: $count, mono: true, compact: true)
+                setting("Images", count > 1 ? (seedMode == "random" ? "random seeds" : "seed, seed+1, …") : "") {
+                    HStack(spacing: 6) {
+                        Segmented(options: [1, 2, 4, 8, 16, 32].map { ($0, "\($0)") }, selection: $count, mono: true, compact: true)
+                        LXField(placeholder: "#", text: Binding(
+                            get: { [1, 2, 4, 8, 16, 32].contains(count) ? "" : String(count) },
+                            set: { text in
+                                let digits = text.filter(\.isNumber)
+                                if let n = Int(digits.prefix(3)), n > 0 { count = min(n, ImageStudio.maxCount) }
+                            }), mono: true)
+                            .frame(width: 52)
+                            .help("Any number up to \(ImageStudio.maxCount)")
+                    }
+                }
+                if count > 1 {
+                    setting("Seeds", "") {
+                        Segmented(options: [("sequential", "Sequential"), ("random", "Random")], selection: $seedMode, compact: true)
+                    }
                 }
                 setting("Seed", "same seed = same image") {
                     HStack(spacing: 6) {
@@ -631,10 +648,12 @@ struct ImageComposer: View {
 
     private func generate() {
         let seed = UInt64(studio.draftSeed.trimmingCharacters(in: .whitespaces)) ?? ImageRequest.randomSeed()
-        studio.generate(ImageRequest(prompt: studio.draftPrompt, negativePrompt: studio.draftNegative, steps: params.steps,
-                                     cfg: params.cfg, seed: seed, count: count, size: params.size,
-                                     loras: studio.activeLoRAs.filter { $0.scale != 0 },
-                                     source: studio.sourceImage, strength: studio.strength), spec: spec)
+        var request = ImageRequest(prompt: studio.draftPrompt, negativePrompt: studio.draftNegative, steps: params.steps,
+                                   cfg: params.cfg, seed: seed, count: count, size: params.size,
+                                   loras: studio.activeLoRAs.filter { $0.scale != 0 },
+                                   source: studio.sourceImage, strength: studio.strength)
+        if count > 1, seedMode == "random" { request.seeds = ImageRequest.randomSeeds(first: seed, count: count) }
+        studio.generate(request, spec: spec)
     }
 }
 
@@ -876,11 +895,12 @@ struct ImageCanvas: View {
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
+                let painting = studio.isBusy && studio.watchingProgress
                 if let record = studio.selected, let url = studio.url(for: record) {
                     FileImage(url: url, cornerRadius: LX.R.xl)
                         .shadow(color: .black.opacity(0.45), radius: 24, y: 14)
-                        .opacity(studio.isBusy ? 0.35 : 1)
-                        .blur(radius: studio.isBusy ? 6 : 0)
+                        .opacity(painting ? 0.35 : 1)
+                        .blur(radius: painting ? 6 : 0)
                         .padding(28)
                         .id(record.id)
                         .transition(.opacity.combined(with: .scale(scale: 0.98)))
@@ -890,11 +910,30 @@ struct ImageCanvas: View {
                         Text("Describe an image and press Generate").font(LX.F.body).foregroundStyle(LX.C.tertiary)
                     }
                 }
-                if studio.isBusy { PaintingProgress(phase: studio.phase) }
+                if painting { PaintingProgress(phase: studio.phase) }
+            }
+            .overlay(alignment: .bottom) {
+                // Generating in the background while a history image is shown.
+                if studio.isBusy && !studio.watchingProgress {
+                    Button { withAnimation(LX.M.hover) { studio.watchProgress() } } label: {
+                        HStack(spacing: 7) {
+                            ProgressView().controlSize(.mini)
+                            Text(ImageRunText.status(studio)).font(LX.F.mono(11)).foregroundStyle(LX.C.secondary)
+                        }
+                        .padding(.horizontal, 12).frame(height: 26)
+                        .background(Capsule().fill(.ultraThinMaterial))
+                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 12)
+                    .help("Show the image being generated")
+                    .transition(.opacity)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(.easeInOut(duration: 0.35), value: studio.selected?.id)
             .animation(.easeInOut(duration: 0.3), value: studio.isBusy)
+            .animation(.easeInOut(duration: 0.3), value: studio.watchingProgress)
 
             if let record = studio.selected {
                 Rectangle().fill(LX.C.divider).frame(height: 1)
@@ -1026,7 +1065,7 @@ struct ImageHistoryGrid: View {
         VStack(alignment: .leading, spacing: 0) {
             SectionLabel(text: "History", trailing: studio.history.isEmpty ? nil : "\(studio.history.count)")
                 .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 8)
-            if studio.history.isEmpty {
+            if studio.history.isEmpty && !studio.isBusy {
                 Text("Your images appear here. They’re saved on this Mac.")
                     .font(LX.F.caption).foregroundStyle(LX.C.tertiary).padding(.horizontal, 14)
                 Spacer()
@@ -1034,8 +1073,13 @@ struct ImageHistoryGrid: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: columns), spacing: 8) {
+                            if studio.isBusy {
+                                ForEach(0..<max(1, studio.runCount - studio.runDone), id: \.self) { slot in
+                                    PendingThumb(first: slot == 0)
+                                }
+                            }
                             ForEach(studio.history) { record in
-                                HistoryThumb(record: record, selected: record.id == studio.selected?.id) { focused = true }
+                                HistoryThumb(record: record, selected: record.id == studio.selected?.id && !(studio.isBusy && studio.watchingProgress)) { focused = true }
                                     .id(record.id)
                             }
                         }
@@ -1067,8 +1111,69 @@ struct ImageHistoryGrid: View {
         let current = items.firstIndex { $0.id == studio.selected?.id } ?? 0
         let next = min(max(current + step, 0), items.count - 1)
         guard next != current || studio.selectedID == nil else { return }
-        studio.selectedID = items[next].id
+        studio.select(items[next].id)
         withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(items[next].id) }
+    }
+}
+
+/// Status line of the running batch.
+enum ImageRunText {
+    @MainActor static func status(_ studio: ImageStudio) -> String {
+        let batch = studio.runCount > 1 ? "Image \(min(studio.runDone + 1, studio.runCount)) of \(studio.runCount) · " : ""
+        switch studio.phase {
+        case .generating(_, _, let step, let total): return batch + (step == 0 ? "reading the prompt" : "step \(step) of \(total)")
+        case .loadingModel: return "Loading the model…"
+        case .freeingMemory: return "Making room in memory…"
+        case .waiting: return "Waiting for the GPU…"
+        case .idle: return ""
+        }
+    }
+}
+
+/// A slot in the history for an image still being made: the first shows live progress, the rest are queued.
+struct PendingThumb: View {
+    let first: Bool
+    @State private var shimmer = false
+    private var studio: ImageStudio { AppServices.shared.images }
+
+    var body: some View {
+        let watching = studio.watchingProgress
+        let fraction: Double = {
+            if first, case .generating(_, _, let step, let total) = studio.phase, total > 0 { return Double(step) / Double(total) }
+            return 0
+        }()
+        Color.black.opacity(0.25)
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                LinearGradient(colors: [LX.C.liveCyan.opacity(0.0), LX.C.liveViolet.opacity(first ? 0.22 : 0.08), LX.C.liveCyan.opacity(0.0)],
+                               startPoint: shimmer ? .bottomTrailing : .topLeading, endPoint: shimmer ? .topLeading : .bottomTrailing)
+            }
+            .overlay {
+                VStack(spacing: 6) {
+                    if first {
+                        ZStack {
+                            Circle().stroke(Color.white.opacity(0.1), lineWidth: 2.5)
+                            Circle().trim(from: 0, to: max(0.02, fraction))
+                                .stroke(LX.C.liveGradient, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                        }
+                        .frame(width: 26, height: 26)
+                        .animation(.easeOut(duration: 0.3), value: fraction)
+                        Text(fraction > 0 ? "\(Int(fraction * 100))%" : "Starting")
+                            .font(LX.F.mono(10)).foregroundStyle(LX.C.secondary)
+                    } else {
+                        Image(systemName: "hourglass").font(.system(size: 12)).foregroundStyle(LX.C.tertiary)
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous)
+                .strokeBorder(first && watching ? AnyShapeStyle(LX.C.liveGradient) : AnyShapeStyle(Color.white.opacity(0.08)),
+                              lineWidth: first && watching ? 2 : 1))
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation(LX.M.hover) { studio.watchProgress() } }
+            .help(first ? "Generating — click to watch" : "Queued")
+            .onAppear { withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) { shimmer = true } }
     }
 }
 
@@ -1106,7 +1211,7 @@ struct HistoryThumb: View {
             .strokeBorder(selected ? LX.C.accent.opacity(0.85) : Color.white.opacity(hover ? 0.2 : 0.06), lineWidth: selected ? 2 : 1))
         .scaleEffect(hover ? 1.02 : 1)
         .contentShape(Rectangle())
-        .onTapGesture { studio.selectedID = record.id; onSelect() }
+        .onTapGesture { studio.select(record.id); onSelect() }
         .onHover { h in withAnimation(LX.M.hover) { hover = h } }
         .help(record.prompt)
         .contextMenu {
