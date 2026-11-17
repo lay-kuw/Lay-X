@@ -153,6 +153,9 @@ struct ImageHistoryStoreTests {
         let base = ImageModelSpec.spec(for: ModelRepoID("someone/klein-base-ft")!, family: .flux2KleinBase)
         #expect(base.family == .flux2KleinBase && base.name == "klein base ft")
         #expect(ImageFamily(modelType: nil) == .sdxl && ImageFamily(modelType: "qwen-image") == .qwenImage)
+        let z = ImageModelSpec.spec(for: ModelRepoID("someone/z-image-turbo-ft")!, family: .zImage)
+        #expect(z.family == .zImage && z.defaultSteps == 8 && !z.usesGuidance && z.family.sourceMode == .strength && !z.family.swapsLoRAsLive)
+        #expect(ImageModelSpec.spec(for: ModelRepoID("x/zb")!, family: .zImageBase).usesGuidance)
     }
 
     @Test func diffusersFilesTakeComponentsOnly() {
@@ -240,6 +243,9 @@ struct LoRALibraryTests {
         #expect(fit(["x"], "flux-2-klein-9b") == .otherBase("FLUX.2 klein 9B"))
         #expect(fit(["lora_te2_text_model_encoder_layers_0_mlp_fc1.lora_up.weight"]) == .fits(.sdxl))
         #expect(fit(["something"]) == .unknown)
+        // Z-Image: single-stream `layers.N.attention.*` / `feed_forward.*`.
+        #expect(fit(["diffusion_model.layers.12.attention.to_q.lora_A.weight", "layers.3.feed_forward.w1.lora_B.weight"]) == .fits(.zImage))
+        #expect(fit(["x"], "Z-Image-Turbo") == .fits(.zImage))
         // A whole checkpoint dropped in as a "LoRA" (the bug report): not applied, and refused on import.
         let checkpoint = ["model.diffusion_model.input_blocks.0.0.weight", "first_stage_model.decoder.conv_in.weight",
                           "conditioner.embedders.1.model.logit_scale"]

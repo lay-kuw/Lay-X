@@ -37,7 +37,7 @@ lights that shimmer while the model thinks. 🔮
 | 💬 **Chat** | Streaming replies, Markdown & code, collapsible reasoning (“Thinking” on/off), rename, ★ pin to keep |
 | 🪄 **Mini Chat** | Press **⌥ Space** anywhere → a floating glass box appears. Ask, read, done. |
 | 🛠️ **Work** | Open a project folder, describe a change, get a **diff**. Nothing is written until you press **Apply**. |
-| 🎨 **Image** | Type a prompt, get a picture — FLUX.2 klein, Qwen‑Image and SDXL‑family models on MLX, LoRA, image to image, fully offline. |
+| 🎨 **Image** | Type a prompt, get a picture — Z‑Image, FLUX.2 klein, Qwen‑Image and SDXL‑family models on MLX, LoRA, image to image, fully offline. |
 | 🌐 **Web search** | Off / Auto / On. DuckDuckGo, Brave or your own SearXNG — only the *query* ever leaves your Mac. |
 | 📦 **Models** | Browse & download MLX models from Hugging Face (trending, likes, downloads…), resume, verify, manage. |
 | 📈 **Performance** | Live speed cards in plain words + real benchmarks (TTFT, prefill, decode, context sweeps). |
@@ -117,11 +117,13 @@ it, save it anywhere, reuse its prompt & seed, or toss it. 🖼️
 
 | Model | Good at |
 |---|---|
-| DreamShaper XL Turbo | ⭐ high quality at 1024 px in ~6 steps — start here (7 GB) |
+| Z‑Image Turbo | ⭐ photographic detail and bilingual text in 8 steps (20 GB) |
+| DreamShaper XL Turbo | high quality at 1024 px in ~6 steps — the lightest start (7 GB) |
 | FLUX.2 klein 4B | ⚡ sharp, prompt‑faithful images (and text!) in 4 steps; edits a reference picture (16 GB) |
 | Qwen‑Image Flash | 🔤 superb text and layout in 4 steps, 8‑bit (30 GB) |
 | FLUX.2 klein base 4B | klein with guidance + negative prompt, ~28 steps |
 | Qwen‑Image 2512 | the full 20B Qwen‑Image — best quality, slow (58 GB) |
+| Z‑Image | the undistilled Z‑Image with guidance, ~28 steps |
 | SDXL 1.0 · RealVisXL 5 · Juggernaut XL 9 | all‑rounder, photographs, cinematic scenes |
 | Animagine XL 4 | anime illustration |
 | SDXL Turbo | instant 512 px drafts |
@@ -131,11 +133,11 @@ it, save it anywhere, reuse its prompt & seed, or toss it. 🖼️
 Tweak **size**, **steps**, the number of images and the **seed**. Lay X only shows what the chosen model can
 use, so nothing silently does nothing: 🎛️
 
-| | SDXL | FLUX.2 klein | klein base | Qwen‑Image |
+| | SDXL | Z‑Image | FLUX.2 klein | Qwen‑Image |
 |---|---|---|---|---|
-| Guidance (CFG) + negative prompt | ✅ | built in | ✅ | ✅ full · built in for Flash |
-| Image to image | ✅ with strength | ✅ as a reference ("make it night") | ✅ as a reference | — |
-| LoRA | ✅ merged at load | ✅ up to 4, switch instantly | ✅ | ✅ up to 4, switch instantly |
+| Guidance (CFG) + negative prompt | ✅ | Turbo: built in · base: ✅ | distilled: built in · base: ✅ | Flash: built in · full: ✅ |
+| Image to image | ✅ with strength | ✅ with strength | ✅ as a reference ("make it night") | — |
+| LoRA | ✅ merged at load | ✅ up to 4 (reloads) | ✅ up to 4, switch instantly | ✅ up to 4, switch instantly |
 
 Add **LoRA** files (`.safetensors`, kohya / diffusers / PEFT) to change the style or teach a subject — Lay X reads
 each file to see which model it's for and greys out the ones that don't fit. 🧩
@@ -190,7 +192,7 @@ Lay-X/
 ├── LayX/            the app (Swift package)
 │   ├── Sources/
 │   │   ├── LayXCore     chats, prompts, inference coordinator, models, Work, performance, SQLite
-│   │   ├── LayXMLX      the MLX engines (text: mlx-swift-lm · images: SDXL, FLUX.2 klein, Qwen-Image)
+│   │   ├── LayXMLX      the MLX engines (text: mlx-swift-lm · images: SDXL, Z-Image, FLUX.2 klein, Qwen-Image)
 │   │   ├── StableDiffusionMLX  SDXL on MLX + LoRA merging (vendored, MIT)
 │   │   ├── LayXServer   OpenAI-compatible server (Hummingbird)
 │   │   └── LayXApp      SwiftUI app, design system, screens, Mini Chat
@@ -217,7 +219,7 @@ Built with love on top of these wonderful projects:
 [MLX](https://github.com/ml-explore/mlx) & [MLX Swift](https://github.com/ml-explore/mlx-swift) ·
 [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm) ·
 [mlx-swift-examples](https://github.com/ml-explore/mlx-swift-examples) (Stable Diffusion port, MIT) ·
-[flux2-klein-swift](https://github.com/xocialize/flux2-klein-swift) & [qwen-image-edit-swift](https://github.com/xocialize/qwen-image-edit-swift) (FLUX.2 klein / Qwen‑Image ports, MIT) ·
+[flux2-klein-swift](https://github.com/xocialize/flux2-klein-swift), [qwen-image-edit-swift](https://github.com/xocialize/qwen-image-edit-swift) & [z-image-swift](https://github.com/xocialize/z-image-swift) (FLUX.2 klein / Qwen‑Image / Z‑Image ports, MIT) ·
 [Hummingbird](https://github.com/hummingbird-project/hummingbird) ·
 [swift-transformers](https://github.com/huggingface/swift-transformers) ·
 and every model author on [Hugging Face](https://huggingface.co/mlx-community). 🤗

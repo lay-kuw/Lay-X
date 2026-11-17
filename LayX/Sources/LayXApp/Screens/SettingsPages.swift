@@ -405,7 +405,7 @@ struct ImageSettings: View {
                         AppState.shared.screen = .models
                     }
                 }
-                screen.row("LoRAs", "\(studio.loraLibrary.count) added · .safetensors files for SDXL, FLUX.2 klein and Qwen-Image") {
+                screen.row("LoRAs", "\(studio.loraLibrary.count) added · .safetensors files for SDXL, Z-Image, FLUX.2 klein and Qwen-Image") {
                     if let folder = studio.loraFolder {
                         LXButton(title: "Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
                     }

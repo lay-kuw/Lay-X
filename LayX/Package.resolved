@@ -1,5 +1,5 @@
 {
-  "originHash" : "663bac10569f0920700c3cf51552fed6aa1e331ad92449403ab9c18b83736ed4",
+  "originHash" : "4dcf08cec38f5081fdb5dcb5f931f6ba80eddb0874790c30d735b59f280c6d4f",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -359,6 +359,15 @@
       "state" : {
         "revision" : "6447536015f3d600f3d65323b10976103b337ca7",
         "version" : "0.13.0"
+      }
+    },
+    {
+      "identity" : "z-image-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/xocialize/z-image-swift",
+      "state" : {
+        "revision" : "f7c22ed92ac4e35dab0f9c110812f2dfa981150f",
+        "version" : "0.7.1"
       }
     }
   ],

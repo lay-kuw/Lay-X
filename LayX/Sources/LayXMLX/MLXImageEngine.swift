@@ -7,6 +7,7 @@ import LayXCore
 import MLX
 import QwenImageEdit
 import StableDiffusionMLX
+import ZImage
 import Tokenizers
 import UniformTypeIdentifiers
 
@@ -21,6 +22,7 @@ public actor MLXImageEngine: ImageEngine {
         case sdxl(StableDiffusionMLX.ModelContainer<TextToImageGenerator>, StableDiffusionConfiguration)
         case klein(KleinRuntime)
         case qwen(QwenRuntime)
+        case zImage(ZImageRuntime)
     }
 
     private var loaded: Loaded?
@@ -52,6 +54,11 @@ public actor MLXImageEngine: ImageEngine {
                 loaded = .qwen(runtime)
                 Memory.clearCache()
                 return try runtime.setLoRAs(loras)
+            case .zImage, .zImageBase:
+                let runtime = try await ZImageRuntime(directory: directory, loras: loras)
+                loaded = .zImage(runtime)
+                Memory.clearCache()
+                return LoRALoadReport(appliedLayers: runtime.loraLayers)
             }
         } catch {
             loaded = nil
@@ -65,7 +72,7 @@ public actor MLXImageEngine: ImageEngine {
             switch loaded {
             case .klein(let runtime): return try runtime.setLoRAs(loras)
             case .qwen(let runtime): return try runtime.setLoRAs(loras)
-            case .sdxl, nil: return nil
+            case .sdxl, .zImage, nil: return nil
             }
         } catch {
             throw ImageEngineError.loadFailed("the LoRA couldn’t be applied: \((error as? LocalizedError)?.errorDescription ?? "\(error)")")
@@ -108,6 +115,8 @@ public actor MLXImageEngine: ImageEngine {
                     png = try runtime.generate(request, seed: seed, onStep: onStep)
                 case .qwen(let runtime):
                     png = try await runtime.generate(request, seed: seed, onStep: onStep)
+                case .zImage(let runtime):
+                    png = try runtime.generate(request, seed: seed, onStep: onStep)
                 }
                 Memory.clearCache()
                 continuation.yield(.image(index: index, png: png, seed: seed))
@@ -417,6 +426,82 @@ final class QwenRuntime {
             width: request.size.width, height: request.size.height, steps: request.steps,
             trueCFGScale: Float(guided ? request.cfg : 1), seed: seed, progress: { onStep($0, $1) })
         if Task.isCancelled { throw CancellationError() }
+        return try MLXImageEngine.pngData(rgb: result.pixels, width: result.width, height: result.height)
+    }
+}
+
+// MARK: - Z-Image
+
+/// A loaded Z-Image pipeline (6B DiT, Qwen3-4B encoder, FLUX.1 autoencoder). LoRAs are side paths installed at
+/// load (strength fixed per LoRA), so changing them reloads the model.
+final class ZImageRuntime {
+    private let generator: ZImageGenerator
+    private(set) var loraLayers = 0
+
+    init(directory: URL, loras: [LoRAFile]) async throws {
+        let path = directory.path
+        let transformer = try ZImageWeights.loadTransformer(snapshotPath: path, dtype: .bfloat16)
+        for lora in loras {
+            let tensors = try Self.peftTensors(try MLX.loadArrays(url: lora.url))
+            let scale = try ZImageStepLoRA.install(on: transformer, tensors: tensors)
+            scale.value = Float(lora.scale)
+            loraLayers += tensors.keys.filter { $0.hasSuffix(".lora_A.weight") }.count
+        }
+        let vae = try ZImageWeights.loadVAE(snapshotPath: path, dtype: .float32)
+        let encoder = try ZImageWeights.loadTextEncoder(snapshotPath: path, dtype: .bfloat16)
+        let tokenizer = try await AutoTokenizer.from(modelFolder: directory.appendingPathComponent("tokenizer"))
+        var shift: Float = 3, dynamic = false
+        if let data = try? Data(contentsOf: directory.appendingPathComponent("scheduler/scheduler_config.json")),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            shift = (json["shift"] as? NSNumber)?.floatValue ?? 3
+            dynamic = json["use_dynamic_shifting"] as? Bool ?? false
+        }
+        generator = ZImageGenerator(transformer: transformer, vae: vae,
+                                    textEncoder: ZImageTextEncoder(encoder: encoder, tokenizer: tokenizer),
+                                    schedulerShift: shift, schedulerDynamic: dynamic, transformerDtype: .bfloat16)
+    }
+
+    /// LoRA tensors in the PEFT names the port expects (`layers.N.attention.to_q.lora_A.weight`): strips
+    /// `transformer.` / `diffusion_model.` prefixes, maps kohya `lora_down/up`, folds `alpha/rank` into B.
+    static func peftTensors(_ raw: [String: MLXArray]) throws -> [String: MLXArray] {
+        var out: [String: MLXArray] = [:]
+        var alphas: [String: Float] = [:]
+        for (key, value) in raw {
+            var k = key
+            for prefix in ["base_model.model.", "transformer.", "diffusion_model.", "model."] where k.hasPrefix(prefix) {
+                k = String(k.dropFirst(prefix.count))
+            }
+            if k.hasSuffix(".alpha") { alphas[String(k.dropLast(".alpha".count))] = value.asType(.float32).item(Float.self); continue }
+            k = k.replacingOccurrences(of: ".lora_down.weight", with: ".lora_A.weight")
+                 .replacingOccurrences(of: ".lora_up.weight", with: ".lora_B.weight")
+                 .replacingOccurrences(of: ".lora.down.weight", with: ".lora_A.weight")
+                 .replacingOccurrences(of: ".lora.up.weight", with: ".lora_B.weight")
+            out[k] = value
+        }
+        for (path, alpha) in alphas {
+            guard let a = out[path + ".lora_A.weight"], let b = out[path + ".lora_B.weight"] else { continue }
+            out[path + ".lora_B.weight"] = (b.asType(.float32) * (alpha / Float(a.dim(0)))).asType(b.dtype)
+        }
+        return out
+    }
+
+    func generate(_ request: ImageRequest, seed: UInt64, onStep: @escaping @Sendable (Int, Int) -> Void) throws -> Data {
+        let w = request.size.width / 16 * 16, h = request.size.height / 16 * 16
+        let guided = request.cfg > 1
+        let guidance = Float(guided ? request.cfg : 0)
+        let negative = guided && !request.negativePrompt.isEmpty ? request.negativePrompt : nil
+        let result: (pixels: [UInt8], width: Int, height: Int)
+        if let source = request.source {
+            let px = try MLXImageEngine.sourcePixels(source, size: .init(w, h))
+            let image = (MLXArray(px.bytes, [h, w, 3]).asType(.float32) / 127.5 - 1).transposed(2, 0, 1).expandedDimensions(axis: 0)
+            result = generator.generateImg2Img(prompt: request.prompt, negativePrompt: negative, image: image,
+                                               width: w, height: h, steps: request.steps, guidanceScale: guidance,
+                                               strength: Float(request.strength), seed: seed, onStep: onStep)
+        } else {
+            result = generator.generate(prompt: request.prompt, negativePrompt: negative, width: w, height: h,
+                                        steps: request.steps, guidanceScale: guidance, seed: seed, onStep: onStep)
+        }
+        if Task.isCancelled || result.pixels.isEmpty { throw CancellationError() }
         return try MLXImageEngine.pngData(rgb: result.pixels, width: result.width, height: result.height)
     }
 }

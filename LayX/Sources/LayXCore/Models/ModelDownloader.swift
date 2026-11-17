@@ -132,6 +132,18 @@ public actor ModelDownloader {
                 throw ModelStoreError.incompatible("incomplete SDXL pipeline (missing \(picked.missing.prefix(3).joined(separator: ", ")))")
             }
             return (chosen, ImageFamily.sdxl.rawValue)
+        case "ZImagePipeline":
+            let picked = DiffusersFiles.select(from: all)
+            guard let chosen = picked.files else {
+                throw ModelStoreError.incompatible("incomplete pipeline (missing \(picked.missing.prefix(3).joined(separator: ", ")))")
+            }
+            if try await json("transformer/config.json")["quantization_config"] != nil {
+                throw ModelStoreError.incompatible("pre-quantized weights can’t be loaded — choose the bf16 version")
+            }
+            // Turbo is distilled with shift 3; the base model uses 6.
+            let shift = (try? await json("scheduler/scheduler_config.json"))?["shift"] as? Double ?? 3
+            let turbo = shift < 4.5 || id.name.lowercased().contains("turbo")
+            return (chosen, (turbo ? ImageFamily.zImage : .zImageBase).rawValue)
         case "Flux2KleinPipeline", "QwenImagePipeline":
             let picked = DiffusersFiles.select(from: all)
             guard let chosen = picked.files else {
@@ -155,7 +167,7 @@ public actor ModelDownloader {
             let distilled = index["is_distilled"] as? Bool ?? false
             return (chosen, (distilled ? ImageFamily.flux2Klein : .flux2KleinBase).rawValue)
         default:
-            throw ModelStoreError.incompatible("\(className) isn’t supported — Lay X runs SDXL, FLUX.2 klein 4B and Qwen-Image")
+            throw ModelStoreError.incompatible("\(className) isn’t supported — Lay X runs SDXL, FLUX.2 klein 4B, Qwen-Image and Z-Image")
         }
     }
 

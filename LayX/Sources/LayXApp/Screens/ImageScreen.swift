@@ -654,7 +654,7 @@ struct ImageComposer: View {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "safetensors") ?? .data]
         panel.allowsMultipleSelection = true
-        panel.message = "Choose LoRA files (.safetensors) for SDXL, FLUX.2 klein 4B or Qwen-Image. They are copied into Lay X."
+        panel.message = "Choose LoRA files (.safetensors) for SDXL, Z-Image, FLUX.2 klein 4B or Qwen-Image. They are copied into Lay X."
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { studio.importLoRA(url) }
         showLoRAs = true

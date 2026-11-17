@@ -183,7 +183,7 @@ struct ImageModelsPane: View {
                           selection: $hubSort)
             }
             HStack(spacing: 10) {
-                Segmented(options: [(ImageFamily?.none, "All supported"), (.sdxl, "SDXL"), (.flux2Klein, "FLUX.2 klein"), (.qwenImage, "Qwen-Image")],
+                Segmented(options: [(ImageFamily?.none, "All supported"), (.sdxl, "SDXL"), (.zImage, "Z-Image"), (.flux2Klein, "FLUX.2 klein"), (.qwenImage, "Qwen-Image")],
                           selection: $hubFamily)
                     .fixedSize()
                 Spacer()
@@ -193,6 +193,7 @@ struct ImageModelsPane: View {
                  : hubFamily == .qwenImage
                  ? "Qwen-Image models in bf16 (or Lay X’s 8-bit layout). Pre-quantized repos (bnb, SDNQ, Nunchaku) and Edit models aren’t supported."
                  : hubFamily == .sdxl ? "SDXL checkpoints in diffusers format — Pony, Illustrious, NoobAI and more."
+                 : hubFamily == .zImage ? "Z-Image Turbo and base in bf16 (Alibaba Tongyi), and their fine-tunes. Pre-quantized repos aren’t supported."
                  : "FLUX.2 klein 4B in bf16 — distilled (4 steps) and base (with guidance). 9B models and pre-quantized repos aren’t supported.")
                 .font(LX.F.caption).foregroundStyle(LX.C.tertiary).fixedSize(horizontal: false, vertical: true)
             VStack(spacing: 0) {
@@ -265,7 +266,7 @@ struct ImageModelsPane: View {
                 hubNext = page.next
             } else {
                 // Every supported architecture: one query each, merged in the chosen order.
-                let families: [ImageFamily] = [.sdxl, .flux2Klein, .qwenImage]
+                let families: [ImageFamily] = [.sdxl, .zImage, .flux2Klein, .qwenImage]
                 var merged: [HubModelSummary] = []
                 try await withThrowingTaskGroup(of: (ImageFamily, [HubModelSummary]).self) { group in
                     for family in families {
@@ -404,7 +405,7 @@ struct ImageModelsPane: View {
                     .onTapGesture { selection = key }
                 }
                 if studio.loraLibrary.isEmpty {
-                    Text("No LoRAs yet. Add .safetensors files for SDXL, FLUX.2 klein 4B or Qwen-Image.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary)
+                    Text("No LoRAs yet. Add .safetensors files for SDXL, Z-Image, FLUX.2 klein 4B or Qwen-Image.").font(LX.F.ui(12)).foregroundStyle(LX.C.tertiary)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).frame(height: LX.S.tableRow)
                 }
             }
@@ -433,7 +434,7 @@ struct ImageModelsPane: View {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "safetensors") ?? .data]
         panel.allowsMultipleSelection = true
-        panel.message = "Choose LoRA files (.safetensors) for SDXL, FLUX.2 klein 4B or Qwen-Image. They are copied into Lay X."
+        panel.message = "Choose LoRA files (.safetensors) for SDXL, Z-Image, FLUX.2 klein 4B or Qwen-Image. They are copied into Lay X."
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { studio.importLoRA(url) }
         if let last = panel.urls.last { selection = "lora:\(last.lastPathComponent)" }
@@ -582,6 +583,7 @@ struct FamilyBadge: View {
         case .sdxl: LX.C.accentText
         case .flux2Klein, .flux2KleinBase: LX.C.liveCyan
         case .qwenImage: LX.C.ok
+        case .zImage, .zImageBase: LX.C.warn
         }
         Text(family.displayName).font(LX.F.mono(10)).foregroundStyle(color)
             .padding(.horizontal, 6).frame(height: 18)

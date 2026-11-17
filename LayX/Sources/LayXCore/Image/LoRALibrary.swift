@@ -145,6 +145,7 @@ public struct LoRALibrary: Sendable {
     static func fit(keys: [String], base: String) -> LoRALibrary.Info.Fit {
         if isFullModel(keys) { return .fullModel }
         let lowerBase = base.lowercased()
+        if lowerBase.contains("z-image") || lowerBase.contains("zimage") || lowerBase.contains("z_image") { return .fits(.zImage) }
         if lowerBase.contains("qwen") { return .fits(.qwenImage) }
         if lowerBase.contains("klein") {
             return lowerBase.contains("9b") ? .otherBase("FLUX.2 klein 9B") : .fits(.flux2Klein4B)
@@ -152,6 +153,11 @@ public struct LoRALibrary: Sendable {
         if lowerBase.contains("sdxl") || lowerBase.contains("xl") { return .fits(.sdxl) }
         if lowerBase.contains("sd_v1") || lowerBase.contains("sd_v2") || lowerBase.contains("stable-diffusion-v1") {
             return .otherBase("SD 1.x / 2.x")
+        }
+        // Z-Image's single-stream DiT: `layers.N.attention.to_q`, `feed_forward.w1`.
+        if keys.contains(where: { $0.contains(".attention.to_q") || $0.contains(".attention.to_k") || $0.contains("feed_forward.w") }),
+           keys.contains(where: { $0.contains("layers.") }) {
+            return .fits(.zImage)
         }
         if keys.contains(where: { $0.contains("img_mlp") || $0.contains("txt_mlp") || $0.contains("img_mod") || $0.contains("txt_mod") }) {
             return .fits(.qwenImage)

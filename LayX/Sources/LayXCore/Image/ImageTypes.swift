@@ -35,13 +35,14 @@ public struct ImageSize: Sendable, Hashable, Codable, Identifiable {
 
 /// The LoRA formats Lay X can apply (one per base architecture).
 public enum LoRABase: String, Sendable, Hashable, Codable {
-    case sdxl, flux2Klein4B, qwenImage
+    case sdxl, flux2Klein4B, qwenImage, zImage
 
     public var displayName: String {
         switch self {
         case .sdxl: "SDXL"
         case .flux2Klein4B: "FLUX.2 klein 4B"
         case .qwenImage: "Qwen-Image"
+        case .zImage: "Z-Image"
         }
     }
 }
@@ -57,6 +58,10 @@ public enum ImageFamily: String, Sendable, Hashable, Codable, CaseIterable {
     case flux2KleinBase = "flux2-klein-base"
     /// Qwen-Image (20B MMDiT + Qwen2.5-VL). Text to image only.
     case qwenImage = "qwen-image"
+    /// Z-Image Turbo (6B single-stream DiT + Qwen3-4B), distilled: ~8 steps, no guidance.
+    case zImage = "z-image"
+    /// Z-Image base: ~28 steps with guidance and a negative prompt.
+    case zImageBase = "z-image-base"
 
     public init(modelType: String?) { self = modelType.flatMap(ImageFamily.init(rawValue:)) ?? .sdxl }
 
@@ -66,6 +71,8 @@ public enum ImageFamily: String, Sendable, Hashable, Codable, CaseIterable {
         case .flux2Klein: "FLUX.2 klein"
         case .flux2KleinBase: "FLUX.2 klein base"
         case .qwenImage: "Qwen-Image"
+        case .zImage: "Z-Image Turbo"
+        case .zImageBase: "Z-Image"
         }
     }
 
@@ -83,7 +90,7 @@ public enum ImageFamily: String, Sendable, Hashable, Codable, CaseIterable {
     }
     public var sourceMode: SourceMode {
         switch self {
-        case .sdxl: .strength
+        case .sdxl, .zImage, .zImageBase: .strength
         case .flux2Klein, .flux2KleinBase: .reference
         case .qwenImage: .none
         }
@@ -94,10 +101,11 @@ public enum ImageFamily: String, Sendable, Hashable, Codable, CaseIterable {
         case .sdxl: .sdxl
         case .flux2Klein, .flux2KleinBase: .flux2Klein4B
         case .qwenImage: .qwenImage
+        case .zImage, .zImageBase: .zImage
         }
     }
     /// LoRAs are attached to the loaded model (no reload when the selection changes).
-    public var swapsLoRAsLive: Bool { self != .sdxl }
+    public var swapsLoRAsLive: Bool { self != .sdxl && self != .zImage && self != .zImageBase }
     public var maxLoRAs: Int { self == .sdxl ? 8 : 4 }
     public var loraScaleRange: ClosedRange<Double> { self == .sdxl ? 0...1.5 : 0...2 }
 
@@ -107,6 +115,7 @@ public enum ImageFamily: String, Sendable, Hashable, Codable, CaseIterable {
         case .sdxl: "diffusers:StableDiffusionXLPipeline"
         case .flux2Klein, .flux2KleinBase: "diffusers:Flux2KleinPipeline"
         case .qwenImage: "diffusers:QwenImagePipeline"
+        case .zImage, .zImageBase: "diffusers:ZImagePipeline"
         }
     }
 }
@@ -254,9 +263,26 @@ public struct ImageModelSpec: Sendable, Hashable, Identifiable {
         license: "Apache 2.0", licenseURL: hf("Qwen/Qwen-Image-2512"),
         residentBytes: 41_200_000_000, activationBytesPerMP: 12_000_000_000)
 
+    // Z-Image (Alibaba Tongyi): Qwen3-4B encoder resident with the 6B DiT (bf16).
+    public static let zImageTurbo = ImageModelSpec(
+        id: ModelRepoID("mlx-community/Z-Image-Turbo-bf16")!, name: "Z-Image Turbo", publisher: "Alibaba Tongyi",
+        style: "Photoreal · fast", summary: "Photographic detail and bilingual text in 8 steps — one of the best open models.",
+        family: .zImage, downloadBytes: 20_500_000_000, sizes: ImageSize.klein, defaultSize: .init(1024, 1024),
+        defaultSteps: 8, stepRange: 4...16, defaultCFG: 0, cfgRange: 0...0,
+        license: "Apache 2.0", licenseURL: hf("Tongyi-MAI/Z-Image-Turbo"),
+        residentBytes: 20_800_000_000, activationBytesPerMP: 12_000_000_000)
+
+    public static let zImageBase = ImageModelSpec(
+        id: ModelRepoID("mlx-community/Z-Image-bf16")!, name: "Z-Image", publisher: "Alibaba Tongyi",
+        style: "Photoreal · quality", summary: "The undistilled Z-Image: guidance and negative prompts, ~28 steps.",
+        family: .zImageBase, downloadBytes: 20_500_000_000, sizes: ImageSize.klein, defaultSize: .init(1024, 1024),
+        defaultSteps: 28, stepRange: 10...50, defaultCFG: 4, cfgRange: 1.5...8,
+        license: "Apache 2.0", licenseURL: hf("Tongyi-MAI/Z-Image"),
+        residentBytes: 20_800_000_000, activationBytesPerMP: 14_000_000_000)
+
     public static let catalog: [ImageModelSpec] = [
-        .dreamShaperTurbo, .flux2Klein, .qwenImageFlash, .sdxlBase, .realVis, .juggernaut, .animagine,
-        .flux2KleinBase, .qwenImage2512, .sdxlTurbo,
+        .zImageTurbo, .dreamShaperTurbo, .flux2Klein, .qwenImageFlash, .sdxlBase, .realVis, .juggernaut, .animagine,
+        .zImageBase, .flux2KleinBase, .qwenImage2512, .sdxlTurbo,
     ]
 
     /// Purposes of the curated models; others get their family's typical use.
@@ -271,7 +297,9 @@ public struct ImageModelSpec: Sendable, Hashable, Identifiable {
         case Self.flux2KleinBase.id.description: [.general, .text]
         case Self.qwenImage2512.id.description: [.text, .photo]
         case Self.sdxlTurbo.id.description: [.fast]
-        default: family == .qwenImage ? [.text] : [.general]
+        case Self.zImageTurbo.id.description: [.photo, .general, .fast, .text]
+        case Self.zImageBase.id.description: [.photo, .general]
+        default: family == .qwenImage ? [.text] : family == .zImage || family == .zImageBase ? [.photo] : [.general]
         }
     }
 
@@ -296,6 +324,8 @@ public struct ImageModelSpec: Sendable, Hashable, Identifiable {
             let lower = id.name.lowercased()
             let distilled = ["flash", "lightning", "turbo", "4step", "8step", "fast"].contains { lower.contains($0) }
             base = distilled ? .qwenImageFlash : .qwenImage2512
+        case .zImage: base = .zImageTurbo
+        case .zImageBase: base = .zImageBase
         }
         var spec = base
         spec.id = id
