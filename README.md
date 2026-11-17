@@ -13,7 +13,7 @@ No cloud. No account. No sneaky uploads. Just you, your Apple Silicon, and a ver
 [![Privacy](https://img.shields.io/badge/privacy-on--device-34d399?style=flat-square)](#-pinky-promises)
 [![License](https://img.shields.io/badge/license-MIT-f9a8d4?style=flat-square)](LICENSE)
 
-<img src="assets/screenshot-chat.png" width="820" alt="Lay X chat window (design)">
+<img src="assets/screenshot-chat.png" width="820" alt="Lay X — Chat">
 
 </div>
 
@@ -44,9 +44,9 @@ lights that shimmer while the model thinks. 🔮
 | 🤝 **Plays nice** | Chat jumps in while Work is busy — Work politely pauses, then picks up exactly where it left off. |
 
 <div align="center">
-<img src="assets/screenshot-mini-chat.png" width="400" alt="Mini Chat (design)">
-<img src="assets/screenshot-work.png" width="400" alt="Work (design)">
-<br><sub>Mini Chat and Work (design mockups)</sub>
+<img src="assets/screenshot-work.png" width="400" alt="Lay X — Work">
+<img src="assets/screenshot-image.png" width="400" alt="Lay X — Image">
+<br><sub>Work and Image</sub>
 </div>
 
 ## 🔐 Pinky promises
