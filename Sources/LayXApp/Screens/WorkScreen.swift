@@ -54,6 +54,7 @@ struct WorkProjectView: View {
     @State private var preview: TextFile?
     @State private var mentionIndex = 0
     @FocusState private var inputFocused: Bool
+    @State private var requestSelection: TextSelection?
     @State private var mentionDismissedFor: String?
 
     /// `@` completion candidates for the token being typed (empty when not typing a mention).
@@ -67,9 +68,14 @@ struct WorkProjectView: View {
     private func acceptMention(_ s: MentionCompleter.Suggestion) {
         request = MentionCompleter.apply(s, to: request)
         mentionIndex = 0
-        // Stay in the input (a click on the list would otherwise end editing).
+        // Stay in the input (a click on the list ends editing) with the caret after the mention: regaining focus
+        // would otherwise select the whole text.
         inputFocused = true
-        DispatchQueue.main.async { inputFocused = true }
+        requestSelection = TextSelection(insertionPoint: request.endIndex)
+        DispatchQueue.main.async {
+            inputFocused = true
+            requestSelection = TextSelection(insertionPoint: request.endIndex)
+        }
     }
 
     /// What the `@` mentions in the draft will do (shown as chips inside the composer).
@@ -415,24 +421,31 @@ struct WorkProjectView: View {
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // The conversation keeps all the room it has; a proposal only takes space from its bottom edge, and
+            // the view stays scrolled to the latest message (no jump to the top).
             .defaultScrollAnchor(.bottom)
-            .frame(maxHeight: changes.isEmpty ? .infinity : 260)
+            .frame(maxHeight: .infinity)
 
             if !changes.isEmpty {
-                SectionLabel(text: "Proposed changes").padding(.horizontal, 14).padding(.bottom, 6)
-                ScrollView {
-                    VStack(spacing: 2) {
-                        ForEach(changes) { change in changeRow(change) }
+                VStack(alignment: .leading, spacing: 0) {
+                    Rectangle().fill(LX.C.divider).frame(height: 1).padding(.bottom, 8)
+                    SectionLabel(text: "Proposed changes").padding(.horizontal, 14).padding(.bottom, 6)
+                    ScrollView {
+                        VStack(spacing: 2) {
+                            ForEach(changes) { change in changeRow(change) }
+                        }
+                        .padding(.horizontal, 10)
                     }
-                    .padding(.horizontal, 10)
+                    // Hugs short lists; long ones scroll inside at most ~4 rows.
+                    .frame(maxHeight: min(CGFloat(changes.count) * 56 + 4, 230))
+                    if let rejected = session.changeSet?.rejected, !rejected.isEmpty {
+                        Text("Skipped: " + rejected.map { "\($0.path) — \($0.reason)" }.joined(separator: "; "))
+                            .font(LX.F.caption).foregroundStyle(LX.C.tertiary).padding(.horizontal, 14).padding(.top, 6)
+                            .lineLimit(2)
+                    }
                 }
-                if let rejected = session.changeSet?.rejected, !rejected.isEmpty {
-                    Text("Skipped: " + rejected.map { "\($0.path) — \($0.reason)" }.joined(separator: "; "))
-                        .font(LX.F.caption).foregroundStyle(LX.C.tertiary).padding(.horizontal, 14).padding(.top, 6)
-                }
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-
-            Spacer(minLength: 0)
 
             if !mentionSuggestions.isEmpty { mentionList }
             VStack(alignment: .leading, spacing: 0) {
@@ -441,7 +454,8 @@ struct WorkProjectView: View {
                         .padding(.horizontal, 10).padding(.top, 9)
                         .transition(.opacity)
                 }
-                TextField(changes.isEmpty ? "Describe a change… (@file to read, @new.swift to create, @all)" : "Refine the proposal…", text: $request, axis: .vertical)
+                TextField(changes.isEmpty ? "Describe a change… (@file to read, @new.swift to create, @all)" : "Refine the proposal…",
+                          text: $request, selection: $requestSelection, axis: .vertical)
                     .textFieldStyle(.plain).font(LX.F.body).lineLimit(1...6)
                     .focused($inputFocused)
                     .onKeyPress(.return, phases: .down) { press in
