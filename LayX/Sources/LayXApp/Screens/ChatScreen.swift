@@ -231,6 +231,7 @@ struct ModelPickerPanel: View {
                     .padding(.horizontal, 10).frame(height: 32)
                 }
                 .disabled(inference.isGenerating)
+                .opacity(inference.isGenerating ? 0.4 : 1)
                 .padding(.horizontal, 4).padding(.top, 4)
             }
             PickerRowButton {

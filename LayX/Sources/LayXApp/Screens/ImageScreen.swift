@@ -41,7 +41,8 @@ struct ImageScreen: View {
                     ImageHistoryGrid(columns: 3).frame(width: 420)
                 }
             } else if !library.imageModels.isEmpty {
-                ChooseImageModelCard().frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Like Chat's empty state: an invitation only; models are picked in the header.
+                EmptyImageCard().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 NoImageModelCard().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -162,6 +163,7 @@ struct ImageModelPanel: View {
                     .padding(.horizontal, 10).frame(height: 32)
                 }
                 .disabled(studio.isBusy)
+                .opacity(studio.isBusy ? 0.4 : 1)
                 .padding(.horizontal, 4).padding(.top, 4)
             }
             if studio.loadedModelID != nil {
@@ -179,6 +181,7 @@ struct ImageModelPanel: View {
                     .padding(.horizontal, 10).frame(height: 32)
                 }
                 .disabled(studio.isBusy)
+                .opacity(studio.isBusy ? 0.4 : 1)
                 .padding(.horizontal, 4).padding(.top, 4)
             }
             PickerRowButton {
@@ -250,41 +253,16 @@ struct ImageModelPanel: View {
     }
 }
 
-/// Shown until an image model is chosen this session: the installed models, one click each.
-struct ChooseImageModelCard: View {
-    private var library: ModelLibrary { AppServices.shared.models }
-
+/// No images and no model chosen: the same quiet invitation as an empty chat.
+struct EmptyImageCard: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("IMAGE · ON-DEVICE").font(LX.F.mono(11)).kerning(0.9).foregroundStyle(LX.C.accent)
-                Text("Choose a model").font(LX.F.display).kerning(-0.4)
-                Text("It loads when you generate the first image.")
-                    .font(LX.F.body).foregroundStyle(LX.C.secondary)
-            }
-            VStack(spacing: 2) {
-                ForEach(library.imageModels) { m in
-                    let spec = ImageModelSpec.spec(for: m)
-                    PickerRowButton {
-                        ImagePreferences.select(m.id)
-                    } content: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "paintpalette").font(.system(size: 13)).foregroundStyle(LX.C.tertiary).frame(width: 18)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(spec.name).font(LX.F.ui(12.5, .semibold)).foregroundStyle(LX.C.primary).lineLimit(1)
-                                Text("\(spec.style) · \(ModelDisplay.bytes(m.diskBytes))").font(LX.F.ui(10.5)).foregroundStyle(LX.C.tertiary).lineLimit(1)
-                            }
-                            Spacer(minLength: 8)
-                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(LX.C.tertiary)
-                        }
-                        .padding(.horizontal, 10).frame(height: 44)
-                    }
-                }
-            }
-            .padding(5)
-            .well(radius: LX.R.lg, fill: Color.black.opacity(0.2))
+        VStack(alignment: .leading, spacing: 6) {
+            Text("IMAGE · ON-DEVICE").font(LX.F.mono(11)).kerning(0.9).foregroundStyle(LX.C.accent)
+            Text("What shall we paint?").font(LX.F.display).kerning(-0.4)
+            Text("Choose a model from the palette menu above to start. Everything is made on this Mac.")
+                .font(LX.F.body).foregroundStyle(LX.C.secondary)
         }
-        .frame(width: 420)
+        .frame(width: 520, alignment: .leading)
     }
 }
 
