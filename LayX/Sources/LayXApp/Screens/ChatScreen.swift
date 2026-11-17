@@ -188,6 +188,14 @@ struct ModelPickerPanel: View {
         let loaded = library.installed.filter { $0.id.description == loadedID || $0.id.description == loadingID }
         let available = library.installed.filter { $0.id.description != loadedID && $0.id.description != loadingID }
         VStack(alignment: .leading, spacing: 0) {
+            if inference.isGenerating {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.mini)
+                    Text("Generating — stop it to switch models").font(LX.F.ui(11.5)).foregroundStyle(LX.C.tertiary)
+                    Spacer()
+                }
+                .padding(.horizontal, 15).padding(.top, 9).padding(.bottom, 2)
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     if !loaded.isEmpty {
@@ -206,6 +214,9 @@ struct ModelPickerPanel: View {
             }
             .frame(maxHeight: 340)
             .fixedSize(horizontal: false, vertical: true)
+            // No model switching while something is being generated.
+            .disabled(inference.isGenerating)
+            .opacity(inference.isGenerating ? 0.4 : 1)
             Rectangle().fill(LX.C.divider).frame(height: 1)
             if loadedID != nil {
                 PickerRowButton {
@@ -664,11 +675,36 @@ struct Composer: View {
     @FocusState private var focused: Bool
     @State private var selection: TextSelection?
     @AppStorage(ChatPreferences.thinkingKey) private var thinking = ChatPreferences.defaultThinking
+    @State private var needsModel = false
     private var chats: ChatSessionStore { AppServices.shared.chats }
     private var generating: Bool { chats.isGenerating(state.currentChatID) }
+    /// A model is in memory or loading (Chat never loads one by itself).
+    private var hasModel: Bool {
+        if inference.loadedModel != nil { return true }
+        if case .loading = inference.snapshot.model { return true }
+        return false
+    }
 
     var body: some View {
         VStack(spacing: 0) {
+            if needsModel && !hasModel {
+                Button {
+                    withAnimation(LX.M.mini) { state.modelPanelOpen = true }
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "cpu").font(.system(size: 11))
+                        Text("Choose a model to start — nothing is loaded").font(LX.F.ui(12, .medium))
+                        Spacer(minLength: 4)
+                        Text("Choose…").font(LX.F.ui(12, .semibold)).foregroundStyle(LX.C.accentText)
+                    }
+                    .foregroundStyle(LX.C.secondary)
+                    .padding(.horizontal, 14).frame(height: 34)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+                Rectangle().fill(LX.C.divider).frame(height: 1)
+            }
             TextField(placeholder, text: $state.draft, selection: $selection, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(LX.F.bodyLarge)
@@ -717,16 +753,20 @@ struct Composer: View {
         .shadow(color: .black.opacity(0.35), radius: 20, y: 16)
         .animation(.easeInOut(duration: 0.3), value: generating)
         .animation(LX.M.hover, value: focused)
+        .animation(LX.M.mini, value: needsModel)
+        .onChange(of: hasModel) { _, loaded in if loaded { needsModel = false } }
         .onAppear { focused = true }
         .onChange(of: state.currentChatID) { focused = true }
     }
 
     private var modelName: String {
         if let id = inference.loadedModel?.id, let r = ModelRepoID(id) { return ModelDisplay.name(r) }
-        return AppServices.defaultChatModel(in: AppServices.shared.models).map { ModelDisplay.name($0.id) } ?? "the model"
+        if case .loading(let id, _) = inference.snapshot.model, let r = ModelRepoID(id) { return ModelDisplay.name(r) }
+        return "the model"
     }
 
     private var placeholder: String {
+        if !hasModel { return "Choose a model, then ask anything" }
         let empty = chats.session(state.currentChatID)?.messages.isEmpty ?? true
         return empty ? "Ask \(modelName) anything" : "Message \(modelName)"
     }
@@ -742,6 +782,12 @@ struct Composer: View {
     private func submit() {
         let text = state.draft
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !generating else { return }
+        // Nothing loaded: keep the message and open the model menu instead of loading one silently.
+        guard hasModel else {
+            withAnimation(LX.M.mini) { needsModel = true; state.modelPanelOpen = true }
+            return
+        }
+        needsModel = false
         state.draft = ""
         state.send(text)
     }

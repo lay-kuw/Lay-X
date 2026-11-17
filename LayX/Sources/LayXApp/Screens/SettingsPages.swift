@@ -373,6 +373,7 @@ struct WebSearchSettings: View {
 
 struct ImageSettings: View {
     let screen: SettingsScreen
+    @State private var storageMessage: String?
     @AppStorage(ImagePreferences.keepLoadedKey) private var keepLoaded = 5
     @AppStorage(ImagePreferences.makeRoomKey) private var makeRoom = true
     private var studio: ImageStudio { AppServices.shared.images }
@@ -404,7 +405,7 @@ struct ImageSettings: View {
                         AppState.shared.screen = .models
                     }
                 }
-                screen.row("LoRAs", "\(studio.loraLibrary.count) added · SDXL LoRA .safetensors files") {
+                screen.row("LoRAs", "\(studio.loraLibrary.count) added · .safetensors files for SDXL, FLUX.2 klein and Qwen-Image") {
                     if let folder = studio.loraFolder {
                         LXButton(title: "Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
                     }
@@ -417,6 +418,52 @@ struct ImageSettings: View {
                     }
                 }
             }
+            screen.group("Storage") {
+                screen.row("Image models", library.hasSeparateImageStorage
+                           ? "Their own folder. Models already downloaded elsewhere stay there (switch back to use them)"
+                           : "Same folder as the chat models (Settings → Models & Inference)") {
+                    folderControl(library.imageStore.root, isDefault: !library.hasSeparateImageStorage,
+                                  choose: { url in storageMessage = library.changeImageStorage(to: url) ?? "Image models will be saved there." },
+                                  reset: { storageMessage = library.changeImageStorage(to: nil) ?? "Image models use the model folder again." })
+                }
+                screen.row("LoRAs", "Choosing a folder moves the LoRA files there") {
+                    folderControl(studio.loraFolder, isDefault: UserDefaults.standard.string(forKey: AppServices.loraFolderKey) == nil,
+                                  choose: { url in Task { storageMessage = await AppServices.shared.changeLoRAFolder(to: url) } },
+                                  reset: { Task { storageMessage = await AppServices.shared.changeLoRAFolder(to: nil) } })
+                }
+                screen.row("Generated images", "Choosing a folder moves the saved PNGs there; the history follows") {
+                    folderControl(studio.imagesFolder, isDefault: UserDefaults.standard.string(forKey: AppServices.imagesFolderKey) == nil,
+                                  choose: { url in Task { storageMessage = await AppServices.shared.changeImagesFolder(to: url) } },
+                                  reset: { Task { storageMessage = await AppServices.shared.changeImagesFolder(to: nil) } })
+                }
+            }
+            if let storageMessage {
+                Text(storageMessage).font(LX.F.caption).foregroundStyle(LX.C.secondary)
+            }
+        }
+    }
+}
+
+extension ImageSettings {
+    /// Path (click = show in Finder) + Choose… + Default.
+    @ViewBuilder func folderControl(_ url: URL?, isDefault: Bool, choose: @escaping (URL) -> Void, reset: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Text(((url?.path ?? "—") as NSString).abbreviatingWithTildeInPath)
+                .font(LX.F.mono(11.5)).foregroundStyle(LX.C.accentText)
+                .lineLimit(1).truncationMode(.middle).frame(maxWidth: 220, alignment: .trailing)
+                .help(url?.path ?? "")
+                .onTapGesture { if let url { NSWorkspace.shared.activateFileViewerSelecting([url]) } }
+            LXButton(title: "Choose…") {
+                let panel = NSOpenPanel()
+                panel.canChooseDirectories = true
+                panel.canChooseFiles = false
+                panel.canCreateDirectories = true
+                panel.directoryURL = url
+                panel.prompt = "Use Folder"
+                guard panel.runModal() == .OK, let chosen = panel.url else { return }
+                choose(chosen)
+            }
+            if !isDefault { LXButton(title: "Default") { reset() } }
         }
     }
 }

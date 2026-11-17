@@ -119,6 +119,14 @@ struct ImageModelPanel: View {
         let loaded = library.imageModels.filter { $0.id.description == studio.loadedModelID }
         let available = library.imageModels.filter { $0.id.description != studio.loadedModelID }
         VStack(alignment: .leading, spacing: 0) {
+            if studio.isBusy {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.mini)
+                    Text("Generating — stop it to switch models").font(LX.F.ui(11.5)).foregroundStyle(LX.C.tertiary)
+                    Spacer()
+                }
+                .padding(.horizontal, 15).padding(.top, 9).padding(.bottom, 2)
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     if !loaded.isEmpty {
@@ -137,6 +145,9 @@ struct ImageModelPanel: View {
             }
             .frame(maxHeight: 340)
             .fixedSize(horizontal: false, vertical: true)
+            // No model switching while something is being generated.
+            .disabled(studio.isBusy)
+            .opacity(studio.isBusy ? 0.4 : 1)
             Rectangle().fill(LX.C.divider).frame(height: 1)
             if selected != nil {
                 PickerRowButton {
@@ -374,7 +385,7 @@ struct ImageComposer: View {
                                       range: spec.cfgRange, marker: spec.defaultCFG)
                     }
                 }
-                setting("Images", count > 1 ? (seedMode == "random" ? "random seeds" : "seed, seed+1, …") : "") {
+                setting("Images", "") {
                     HStack(spacing: 6) {
                         Segmented(options: [1, 2, 4, 8, 16, 32].map { ($0, "\($0)") }, selection: $count, mono: true, compact: true)
                         LXField(placeholder: "#", text: Binding(
@@ -387,15 +398,18 @@ struct ImageComposer: View {
                             .help("Any number up to \(ImageStudio.maxCount)")
                     }
                 }
-                if count > 1 {
-                    setting("Seeds", "") {
-                        Segmented(options: [("sequential", "Sequential"), ("random", "Random")], selection: $seedMode, compact: true)
-                    }
-                }
-                setting("Seed", "same seed = same image") {
-                    HStack(spacing: 6) {
-                        LXField(placeholder: "Random", text: $studio.draftSeed, mono: true)
-                        IconButton(symbol: "dice", help: "Pick a seed") { studio.draftSeed = String(ImageRequest.randomSeed()) }
+
+                // One place for seeds: the first image's seed, and (for several images) how the others follow.
+                setting("Seed", count > 1 ? (seedMode == "random" ? "first image · others random" : "first image · then +1 each")
+                                          : "same seed = same image") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            LXField(placeholder: "Random", text: $studio.draftSeed, mono: true)
+                            IconButton(symbol: "dice", help: "Pick a seed") { studio.draftSeed = String(ImageRequest.randomSeed()) }
+                        }
+                        if count > 1 {
+                            Segmented(options: [("sequential", "Sequential"), ("random", "Random")], selection: $seedMode, compact: true)
+                        }
                     }
                 }
                 loraSection

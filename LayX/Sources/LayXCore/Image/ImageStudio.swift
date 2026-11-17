@@ -74,7 +74,7 @@ public final class ImageStudio {
     @ObservationIgnored private let engine: any ImageEngine
     @ObservationIgnored private let coordinator: InferenceCoordinator
     @ObservationIgnored private var store: ImageHistoryStore?
-    @ObservationIgnored private let loras: LoRALibrary?
+    @ObservationIgnored private var loras: LoRALibrary?
     @ObservationIgnored private let modelDirectory: @MainActor (ImageModelSpec) -> URL?
     @ObservationIgnored private let availableMemory: @Sendable () -> Int64
     @ObservationIgnored private let allowUnloadingTextModel: @MainActor () -> Bool
@@ -336,6 +336,12 @@ public final class ImageStudio {
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? "The LoRA couldn’t be added."
         }
+    }
+
+    /// Switches the LoRA folder (Settings → Image Generation → Storage).
+    public func replaceLoRALibrary(_ library: LoRALibrary?) {
+        loras = library
+        refreshLoRAs()
     }
 
     public func deleteLoRA(_ file: String) {

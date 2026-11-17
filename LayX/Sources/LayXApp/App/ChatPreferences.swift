@@ -47,7 +47,11 @@ enum ChatPreferences {
 
 enum ChatSetupError: LocalizedError {
     case noModelInstalled
+    case noModelLoaded
     var errorDescription: String? {
-        "No model is installed yet. Download one in Models (for example mlx-community/Qwen3-4B-4bit)."
+        switch self {
+        case .noModelInstalled: "No model is installed yet. Download one in Models (for example mlx-community/Qwen3-4B-4bit)."
+        case .noModelLoaded: "No model is loaded. Choose one from the model menu at the top of Chat."
+        }
     }
 }

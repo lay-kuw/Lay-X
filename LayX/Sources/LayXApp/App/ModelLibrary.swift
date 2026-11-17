@@ -27,7 +27,13 @@ final class ModelLibrary {
     private(set) var importingCheckpoint: String?
 
     private(set) var store: ModelStore
+    /// Where image models live: the model folder, unless Settings → Image Generation → Storage picks another.
+    private(set) var imageStore: ModelStore
     @ObservationIgnored private var downloader: ModelDownloader
+    @ObservationIgnored private var imageDownloader: ModelDownloader
+    @ObservationIgnored private var textStates: [ModelRepoID: DownloadState] = [:]
+    @ObservationIgnored private var imageStates: [ModelRepoID: DownloadState] = [:]
+    @ObservationIgnored private var imageWatchTask: Task<Void, Never>?
     @ObservationIgnored private let hub = HubAPI()
     @ObservationIgnored private let coordinator: InferenceCoordinator
     @ObservationIgnored private let architectures: any ModelArchitectureSupport
@@ -36,14 +42,28 @@ final class ModelLibrary {
 
     static let lastUsedKey = "lx.modelLastUsed"
 
+    static let imageStorePathKey = "lx.imageModelStorePath"
+
     init(store: ModelStore, coordinator: InferenceCoordinator, architectures: any ModelArchitectureSupport) {
         self.store = store
         self.coordinator = coordinator
         self.architectures = architectures
         downloader = ModelDownloader(store: store, architectures: architectures)
+        let image = Self.imageStore(default: store)
+        imageStore = image
+        imageDownloader = ModelDownloader(store: image, architectures: architectures)
         refresh()
         watchDownloads()
+        watchImageDownloads()
     }
+
+    private static func imageStore(default store: ModelStore) -> ModelStore {
+        guard let path = UserDefaults.standard.string(forKey: imageStorePathKey) else { return store }
+        return ModelStore(root: URL(fileURLWithPath: path, isDirectory: true))
+    }
+
+    /// Image models keep their own folder.
+    var hasSeparateImageStorage: Bool { UserDefaults.standard.string(forKey: Self.imageStorePathKey) != nil }
 
     private func watchDownloads() {
         watchTask?.cancel()
@@ -51,10 +71,48 @@ final class ModelLibrary {
             for await states in await downloader.updates() {
                 guard let self else { return }
                 let finished = states.contains { id, s in s == .completed && self.downloads[id] != .completed }
-                self.downloads = states
+                self.textStates = states
+                self.downloads = self.textStates.merging(self.imageStates) { a, _ in a }
                 if finished { self.refresh() }
             }
         }
+    }
+
+    private func watchImageDownloads() {
+        imageWatchTask?.cancel()
+        imageWatchTask = Task { [weak self, imageDownloader] in
+            for await states in await imageDownloader.updates() {
+                guard let self else { return }
+                let finished = states.contains { id, s in s == .completed && self.downloads[id] != .completed }
+                self.imageStates = states
+                self.downloads = self.textStates.merging(self.imageStates) { a, _ in a }
+                if finished { self.refresh() }
+            }
+        }
+    }
+
+    /// Moves image models to their own folder (nil = back to the model folder). Models already downloaded stay
+    /// where they are (switch back to use them). Returns an error message, or nil on success.
+    func changeImageStorage(to chosen: URL?) -> String? {
+        guard activeDownloads.isEmpty else { return "Wait for downloads to finish before changing storage." }
+        if let chosen {
+            guard let root = try? ModelStore.root(forChosenFolder: chosen) else { return "That folder can’t be used for image models." }
+            if ModelStore.canonicalPath(root) == ModelStore.canonicalPath(store.root) {
+                UserDefaults.standard.removeObject(forKey: Self.imageStorePathKey)
+            } else {
+                UserDefaults.standard.set(root.path, forKey: Self.imageStorePathKey)
+            }
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.imageStorePathKey)
+        }
+        imageStore = Self.imageStore(default: store)
+        imageDownloader = ModelDownloader(store: imageStore, architectures: architectures)
+        imageStates = [:]
+        downloads = textStates
+        watchImageDownloads()
+        refresh()
+        notice = "Image models are now stored in \((imageStore.root.path as NSString).abbreviatingWithTildeInPath)."
+        return nil
     }
 
     // MARK: Storage location
@@ -80,8 +138,17 @@ final class ModelLibrary {
         }
         store = ModelStore(root: root)
         downloader = ModelDownloader(store: store, architectures: architectures)
-        downloads = [:]
+        textStates = [:]
+        downloads = imageStates
         watchDownloads()
+        if !hasSeparateImageStorage {
+            // Image models follow the model folder unless they have their own.
+            imageStore = store
+            imageDownloader = ModelDownloader(store: store, architectures: architectures)
+            imageStates = [:]
+            downloads = [:]
+            watchImageDownloads()
+        }
         refresh()
         notice = "Models are now stored in \((root.path as NSString).abbreviatingWithTildeInPath)."
         return nil
@@ -93,14 +160,17 @@ final class ModelLibrary {
 
     func refresh() {
         let store = self.store
+        let imageStore = self.imageStore
         Task.detached(priority: .userInitiated) {
             let all = store.installedModels()
-            let incomplete = store.incompleteDownloads()
+            let separate = ModelStore.canonicalPath(imageStore.root) != ModelStore.canonicalPath(store.root)
+            let images = separate ? imageStore.installedModels() : all
+            let incomplete = store.incompleteDownloads() + (separate ? imageStore.incompleteDownloads() : [])
             let used = store.totalUsage()
             let free = store.availableCapacity()
             await MainActor.run {
                 self.installed = all.filter { !$0.isImageModel }
-                self.imageModels = all.filter(\.isImageModel)
+                self.imageModels = images.filter(\.isImageModel)
                 self.incomplete = incomplete
                 self.storageUsed = used
                 self.storageFree = free
@@ -186,13 +256,13 @@ final class ModelLibrary {
     /// Starts or resumes a download. `kind` nil = decide: catalog image models, or a resumed download whose
     /// partial folder holds `model_index.json` (diffusers pipeline), are image models.
     func download(_ id: ModelRepoID, kind: ModelKind? = nil) {
-        let partialIndex = store.partialDirectory(for: id).appendingPathComponent("model_index.json")
+        let partialIndex = imageStore.partialDirectory(for: id).appendingPathComponent("model_index.json")
         let isImage = kind == .image || (kind == nil && (ImageModelSpec.spec(id.description) != nil
                                                          || FileManager.default.fileExists(atPath: partialIndex.path)))
         Task {
             do {
                 let profile: DownloadProfile = isImage ? .imagePipeline : .languageModel
-                let installed = try await downloader.download(id, profile: profile)
+                let installed = try await (isImage ? imageDownloader : downloader).download(id, profile: profile)
                 notice = "\(isImage ? ImageModelSpec.spec(for: installed).name : ModelDisplay.name(id)) is ready."
             } catch is CancellationError {
                 refresh()
@@ -204,12 +274,13 @@ final class ModelLibrary {
     }
 
     func cancelDownload(_ id: ModelRepoID) {
-        Task { await downloader.cancel(id) }
+        Task { await downloader.cancel(id); await imageDownloader.cancel(id) }
     }
 
     func discardPartial(_ id: ModelRepoID) {
         Task {
             await downloader.discardPartial(id)
+            await imageDownloader.discardPartial(id)
             refresh()
         }
     }
@@ -239,8 +310,9 @@ final class ModelLibrary {
 
     func delete(_ id: ModelRepoID, loadedID: String?) {
         do {
-            try store.delete(id, inUse: Set([loadedID].compactMap { $0 }))
-            Task { await downloader.clearFinishedState(id) }
+            let image = imageModels.contains { $0.id == id }
+            try (image ? imageStore : store).delete(id, inUse: Set([loadedID].compactMap { $0 }))
+            Task { await downloader.clearFinishedState(id); await imageDownloader.clearFinishedState(id) }
             notice = "Deleted \(ModelDisplay.name(id))."
         } catch {
             notice = (error as? LocalizedError)?.errorDescription ?? "The model couldn’t be deleted."
@@ -266,13 +338,13 @@ final class ModelLibrary {
         }).trimmingCharacters(in: CharacterSet(charactersIn: "-."))
         if name.isEmpty { name = "checkpoint" }
         guard let id = ModelRepoID("local/\(String(name.prefix(80)))") else { notice = "That file name can’t be used."; return nil }
-        if store.installedModel(id) != nil { notice = "\(stem) is already imported."; return nil }
-        let output = store.directory(for: id)
+        if imageStore.installedModel(id) != nil { notice = "\(stem) is already imported."; return nil }
+        let output = imageStore.directory(for: id)
         importingCheckpoint = stem
         defer { importingCheckpoint = nil }
         #if canImport(LayXMLX)
         let templateDir = template.directory
-        let store = self.store
+        let store = self.imageStore
         do {
             try await Task.detached(priority: .userInitiated) {
                 try ImageModelImport.sdxlCheckpoint(file, template: templateDir, to: output)

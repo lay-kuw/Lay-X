@@ -20,14 +20,11 @@ struct RootView: View {
                     .overlay { panelDismissCatcher }
                 if seamless { LayoutHairline() }
                 content
-                    // Seamless: the area reaches the window edges; its content keeps the framed layout's top inset.
-                    .padding(.top, seamless ? LX.S.s2 : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .pane(radius: LX.R.xl, tint: LX.C.content, layout: true)
                 if state.inspector && state.screen == .chat {
                     if seamless { LayoutHairline() }
                     InspectorPanel()
-                        .padding(.top, seamless ? LX.S.s2 : 0)
                         .frame(width: 288)
                         .pane(radius: LX.R.xl, layout: true)
                         .overlay { panelDismissCatcher }

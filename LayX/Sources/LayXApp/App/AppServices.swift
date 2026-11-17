@@ -132,7 +132,16 @@ final class AppServices {
             coordinator: coordinator, repository: pinnedChats,
             settings: { ChatPreferences.current },
             prepareModel: {
-                guard let model = AppServices.defaultChatModel(in: library) else { throw ChatSetupError.noModelInstalled }
+                // Chat never loads a model by itself: the one in memory (or loading) is used, otherwise the user
+                // is asked to choose one.
+                let id: String? = switch await coordinator.snapshot.model {
+                case .ready(let info): info.id
+                case .loading(let id, _): id
+                default: nil
+                }
+                guard let id, let model = library.model(id) else {
+                    throw library.installed.isEmpty ? ChatSetupError.noModelInstalled : ChatSetupError.noModelLoaded
+                }
                 return try await coordinator.load(model.reference)
             },
             webResearcher: { try WebResearcher(config: WebPreferences.config) })
@@ -144,10 +153,10 @@ final class AppServices {
         #endif
         images = ImageStudio(
             engine: imageEngine, coordinator: coordinator, store: database.flatMap(Self.imageStore),
-            loras: (try? LoRALibrary.defaultFolder()).map(LoRALibrary.init(folder:)),
+            loras: Self.loraFolder().map(LoRALibrary.init(folder:)),
             modelDirectory: { spec in
                 // Current storage folder (it can be changed in Settings).
-                AppServices.shared.models.store.installedModel(spec.id).flatMap { $0.isImageModel ? $0.directory : nil }
+                AppServices.shared.models.imageStore.installedModel(spec.id).flatMap { $0.isImageModel ? $0.directory : nil }
             },
             availableMemory: { SystemMemory.availableBytes() },
             allowUnloadingTextModel: { ImagePreferences.makeRoom },
@@ -212,7 +221,74 @@ final class AppServices {
     }
 
     static func imageStore(_ db: SQLiteDatabase) -> ImageHistoryStore? {
-        (try? ImageHistoryStore.defaultFolder()).map { ImageHistoryStore(database: db, folder: $0) }
+        imagesFolder().map { ImageHistoryStore(database: db, folder: $0) }
+    }
+
+    // MARK: Image storage (Settings → Image Generation → Storage)
+
+    static let imagesFolderKey = "lx.imagesFolderPath"
+    static let loraFolderKey = "lx.loraFolderPath"
+
+    /// Generated images: the chosen folder, else `~/.config/lay-x/images`.
+    static func imagesFolder() -> URL? {
+        if let path = UserDefaults.standard.string(forKey: imagesFolderKey) { return URL(fileURLWithPath: path, isDirectory: true) }
+        return try? ImageHistoryStore.defaultFolder()
+    }
+
+    /// LoRAs: the chosen folder, else `~/.config/lay-x/loras`.
+    static func loraFolder() -> URL? {
+        if let path = UserDefaults.standard.string(forKey: loraFolderKey) { return URL(fileURLWithPath: path, isDirectory: true) }
+        return try? LoRALibrary.defaultFolder()
+    }
+
+    /// Moves the generated images (PNG files) to `chosen` (nil = default) and keeps the history pointing at them.
+    /// Returns a message for the user.
+    func changeImagesFolder(to chosen: URL?) async -> String {
+        guard !images.isBusy else { return "Wait for the image generation to finish." }
+        guard let old = Self.imagesFolder(), let target = chosen ?? (try? ImageHistoryStore.defaultFolder()) else {
+            return "That folder can’t be used."
+        }
+        do {
+            let moved = try await Self.moveFiles(from: old, to: target) { $0.hasSuffix(".png") }
+            if chosen == nil { UserDefaults.standard.removeObject(forKey: Self.imagesFolderKey) }
+            else { UserDefaults.standard.set(target.path, forKey: Self.imagesFolderKey) }
+            await images.replaceStore(database.flatMap(Self.imageStore))
+            return "Images are now saved in \((target.path as NSString).abbreviatingWithTildeInPath)\(moved > 0 ? " (\(moved) moved)" : "")."
+        } catch {
+            return "The images couldn’t be moved: \(error.localizedDescription)"
+        }
+    }
+
+    /// Moves the LoRA files to `chosen` (nil = default).
+    func changeLoRAFolder(to chosen: URL?) async -> String {
+        guard !images.isBusy else { return "Wait for the image generation to finish." }
+        guard let old = Self.loraFolder(), let target = chosen ?? (try? LoRALibrary.defaultFolder()) else { return "That folder can’t be used." }
+        do {
+            let moved = try await Self.moveFiles(from: old, to: target) { $0.lowercased().hasSuffix(".safetensors") }
+            if chosen == nil { UserDefaults.standard.removeObject(forKey: Self.loraFolderKey) }
+            else { UserDefaults.standard.set(target.path, forKey: Self.loraFolderKey) }
+            images.replaceLoRALibrary(LoRALibrary(folder: target))
+            return "LoRAs are now kept in \((target.path as NSString).abbreviatingWithTildeInPath)\(moved > 0 ? " (\(moved) moved)" : "")."
+        } catch {
+            return "The LoRAs couldn’t be moved: \(error.localizedDescription)"
+        }
+    }
+
+    /// Moves matching files (top level only); a file already present at the target is kept and the original left.
+    private static func moveFiles(from old: URL, to new: URL, matching: @escaping @Sendable (String) -> Bool) async throws -> Int {
+        try await Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            try fm.createDirectory(at: new, withIntermediateDirectories: true)
+            guard ModelStore.canonicalPath(old) != ModelStore.canonicalPath(new) else { return 0 }
+            var moved = 0
+            for name in (try? fm.contentsOfDirectory(atPath: old.path)) ?? [] where matching(name) && !name.hasPrefix(".") {
+                let target = new.appendingPathComponent(name)
+                guard !fm.fileExists(atPath: target.path) else { continue }
+                try fm.moveItem(at: old.appendingPathComponent(name), to: target)
+                moved += 1
+            }
+            return moved
+        }.value
     }
 
     /// The model used when a chat needs one and none is loaded: the configured default if installed, else the
