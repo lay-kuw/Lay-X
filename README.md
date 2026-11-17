@@ -1,19 +1,17 @@
 <div align="center">
 
-<img src="Sources/LayXIcon/LX.png" width="128" alt="Lay X icon">
-
 # Lay X ✨
 
 **Your cozy little AI that lives entirely on your Mac.** 🍵💻
 
 No cloud. No account. No sneaky uploads. Just you, your Apple Silicon, and a very hard‑working model.
 
-![macOS](https://img.shields.io/badge/macOS-26%2B-9d8cff?style=flat-square&logo=apple&logoColor=white)
-![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-M--series-7dd3fc?style=flat-square)
-![Swift](https://img.shields.io/badge/Swift-6-f97316?style=flat-square&logo=swift&logoColor=white)
-![MLX](https://img.shields.io/badge/powered%20by-MLX-a78bfa?style=flat-square)
-![Privacy](https://img.shields.io/badge/privacy-on--device-34d399?style=flat-square)
-![License](https://img.shields.io/badge/license-MIT-f9a8d4?style=flat-square)
+[![macOS](https://img.shields.io/badge/macOS-26%2B-9d8cff?style=flat-square&logo=apple&logoColor=white)](https://www.apple.com/macos/)
+[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-M--series-7dd3fc?style=flat-square)](https://support.apple.com/en-us/116943)
+[![Swift](https://img.shields.io/badge/Swift-6-f97316?style=flat-square&logo=swift&logoColor=white)](https://www.swift.org)
+[![MLX](https://img.shields.io/badge/powered%20by-MLX-a78bfa?style=flat-square)](https://github.com/ml-explore/mlx)
+[![Privacy](https://img.shields.io/badge/privacy-on--device-34d399?style=flat-square)](#-pinky-promises)
+[![License](https://img.shields.io/badge/license-MIT-f9a8d4?style=flat-square)](LICENSE)
 
 <img src="assets/screenshot-chat.png" width="820" alt="Lay X chat window (design)">
 
