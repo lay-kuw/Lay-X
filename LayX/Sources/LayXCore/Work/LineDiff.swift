@@ -34,63 +34,91 @@ public enum LineDiff {
         return l
     }
 
+    /// Most edit-distance trace cells kept (≈ 16 MB of Ints). Past it the changed middle is reported as one
+    /// replacement block — still a correct diff, just not minimal.
+    static let maxTraceCells = 2_000_000
+
     static func ops(_ a: [String], _ b: [String]) -> [Op] {
-        let n = a.count, m = b.count
+        // Common prefix and suffix are equal runs: keep them out of the O(ND) search.
+        var start = 0
+        while start < a.count, start < b.count, a[start] == b[start] { start += 1 }
+        var endA = a.count, endB = b.count
+        while endA > start, endB > start, a[endA - 1] == b[endB - 1] { endA -= 1; endB -= 1 }
+        var result = (0..<start).map { Op.equal($0, $0) }
+        result += middle(a, b, from: start, a: endA, b: endB)
+        result += (0..<(a.count - endA)).map { Op.equal(endA + $0, endB + $0) }
+        return result
+    }
+
+    /// Myers on a[lo..<hiA] vs b[lo..<hiB]. The trace keeps only the band −d…d of each round (O(D²) memory,
+    /// not O(D·(N+M))), and gives up to a plain replacement past `maxTraceCells`.
+    private static func middle(_ a: [String], _ b: [String], from lo: Int, a hiA: Int, b hiB: Int) -> [Op] {
+        let n = hiA - lo, m = hiB - lo
+        if n == 0 && m == 0 { return [] }
+        if n == 0 { return (0..<m).map { .insert(lo + $0) } }
+        if m == 0 { return (0..<n).map { .delete(lo + $0) } }
         let max = n + m
-        if max == 0 { return [] }
-        var v = [Int](repeating: 0, count: 2 * max + 2)
-        var trace: [[Int]] = []
         let offset = max + 1
+        var v = [Int](repeating: 0, count: 2 * max + 2)
+        var trace: [[Int]] = []   // trace[d][k + d] = v[k] before round d, for k in −d…d
+        var cells = 0
+        var found = false
         outer: for d in 0...max {
-            trace.append(v)
+            trace.append(Array(v[(offset - d)...(offset + d)]))
+            cells += 2 * d + 1
+            if cells > maxTraceCells { break }
             for k in stride(from: -d, through: d, by: 2) {
-                var x: Int
-                if k == -d || (k != d && v[offset + k - 1] < v[offset + k + 1]) {
-                    x = v[offset + k + 1]
-                } else {
-                    x = v[offset + k - 1] + 1
-                }
+                var x = (k == -d || (k != d && v[offset + k - 1] < v[offset + k + 1])) ? v[offset + k + 1] : v[offset + k - 1] + 1
                 var y = x - k
-                while x < n, y < m, a[x] == b[y] { x += 1; y += 1 }
+                while x < n, y < m, a[lo + x] == b[lo + y] { x += 1; y += 1 }
                 v[offset + k] = x
-                if x >= n, y >= m { trace.append(v); break outer }
+                if x >= n, y >= m { found = true; break outer }
             }
         }
-        // Backtrack.
+        guard found else {
+            return (0..<n).map { .delete(lo + $0) } + (0..<m).map { .insert(lo + $0) }
+        }
         var result: [Op] = []
         var x = n, y = m
-        for d in stride(from: trace.count - 2, through: 0, by: -1) {
-            let vd = trace[d]
+        for d in stride(from: trace.count - 1, through: 0, by: -1) {
+            let band = trace[d]
+            func vd(_ k: Int) -> Int { band[k + d] }
             let k = x - y
-            let prevK: Int
-            if k == -d || (k != d && vd[offset + k - 1] < vd[offset + k + 1]) { prevK = k + 1 } else { prevK = k - 1 }
-            let prevX = vd[offset + prevK]
+            let prevK = (k == -d || (k != d && vd(k - 1) < vd(k + 1))) ? k + 1 : k - 1
+            let prevX = d == 0 ? 0 : vd(prevK)
             let prevY = prevX - prevK
-            while x > prevX, y > prevY { x -= 1; y -= 1; result.append(.equal(x, y)) }
+            while x > prevX, y > prevY { x -= 1; y -= 1; result.append(.equal(lo + x, lo + y)) }
             if d > 0 {
-                if x == prevX { y -= 1; result.append(.insert(y)) } else { x -= 1; result.append(.delete(x)) }
+                if x == prevX { y -= 1; result.append(.insert(lo + y)) } else { x -= 1; result.append(.delete(lo + x)) }
             }
         }
-        while x > 0, y > 0 { x -= 1; y -= 1; result.append(.equal(x, y)) }
+        while x > 0, y > 0 { x -= 1; y -= 1; result.append(.equal(lo + x, lo + y)) }
         return result.reversed()
     }
 
-    public static func stats(old: String, new: String) -> DiffStats {
-        var s = DiffStats(added: 0, removed: 0)
-        for op in ops(lines(old), lines(new)) {
+    public static func stats(old: String, new: String) -> DiffStats { diff(old: old, new: new).stats }
+
+    /// The unified diff and its counts from one computation.
+    public static func diff(old: String, new: String, context: Int = 3) -> (lines: [DiffLine], stats: DiffStats) {
+        let a = lines(old), b = lines(new)
+        let all = ops(a, b)
+        var stats = DiffStats(added: 0, removed: 0)
+        for op in all {
             switch op {
-            case .insert: s.added += 1
-            case .delete: s.removed += 1
+            case .insert: stats.added += 1
+            case .delete: stats.removed += 1
             case .equal: break
             }
         }
-        return s
+        return (render(all, a, b, context: context), stats)
     }
 
     /// Unified diff with `context` lines around each change.
     public static func unified(old: String, new: String, context: Int = 3) -> [DiffLine] {
-        let a = lines(old), b = lines(new)
-        let all = ops(a, b)
+        diff(old: old, new: new, context: context).lines
+    }
+
+    static func render(_ all: [Op], _ a: [String], _ b: [String], context: Int) -> [DiffLine] {
         guard all.contains(where: { if case .equal = $0 { false } else { true } }) else { return [] }
         // Mark ops to keep (changes plus surrounding context).
         var keep = [Bool](repeating: false, count: all.count)

@@ -382,7 +382,11 @@ public final class WorkSession {
         let truncated = metrics?.stopReason == .maxTokens || metrics?.stopReason == .contextLimit
         canContinue = truncated && metrics?.stopReason == .maxTokens
         let parsed = ProposalParser.parse(output, knownPaths: Set(selection.files.map(\.path) + selection.newFiles))
-        let set = ChangeSetBuilder.build(summary: parsed.summary, blocks: parsed.blocks, in: workspace)
+        // Reading targets and diffing can be heavy for big files: off the main actor.
+        let workspace = self.workspace
+        let set = await Task.detached(priority: .userInitiated) {
+            ChangeSetBuilder.build(summary: parsed.summary, blocks: parsed.blocks, in: workspace)
+        }.value
         var note = "read \(selection.files.count) file\(selection.files.count == 1 ? "" : "s") · \(Self.compact(selection.estimatedTokens)) ctx"
         if let tps = metrics?.decodeTokensPerSecond { note += String(format: " · %.1f tok/s", tps) }
         if truncated { note += metrics?.stopReason == .contextLimit ? " · stopped: context full" : " · output truncated" }

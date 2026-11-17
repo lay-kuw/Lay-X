@@ -131,7 +131,7 @@ nonisolated enum CommandLineTools {
                 print("key: \(secret)")
             }
             let deps = APIServerDependencies(
-                coordinator: coordinator, installedModels: { [id.description] }, loadModel: { _ in }, defaultModel: { id.description },
+                coordinator: coordinator, installedModels: { [id.description] }, modelReference: { _ in model.reference }, defaultModel: { id.description },
                 keys: keys,
                 log: { r in print("log: \(r.method) \(r.path) \(r.status) \(r.stream ? "stream " : "")\(String(format: "%.0f", r.durationMs))ms tokens=\(r.completionTokens ?? 0) client=\(r.client) ua=\(r.userAgent ?? "-")") })
             let server = APIServerController(deps: deps)

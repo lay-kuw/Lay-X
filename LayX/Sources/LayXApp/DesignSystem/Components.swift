@@ -636,6 +636,8 @@ struct LXField: View {
     @Binding var text: String
     var symbol: String? = nil
     var mono = false
+    /// Shows the clear (×) button while there is text.
+    var clearable = true
     @FocusState private var focused: Bool
     var body: some View {
         HStack(spacing: 7) {
@@ -646,7 +648,7 @@ struct LXField: View {
                 .foregroundStyle(LX.C.primary)
                 .focused($focused)
                 .onExitCommand { focused = false }
-            if !text.isEmpty {
+            if clearable && !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 12)).foregroundStyle(LX.C.tertiary)
                         .contentShape(Rectangle())
@@ -657,7 +659,7 @@ struct LXField: View {
             }
         }
         .animation(LX.M.hover, value: text.isEmpty)
-        .padding(.leading, 10).padding(.trailing, text.isEmpty ? 10 : 7)
+        .padding(.leading, 10).padding(.trailing, text.isEmpty || !clearable ? 10 : 7)
         .frame(height: LX.S.control)
         .well(radius: LX.R.md, fill: Color.black.opacity(0.28))
         .overlay(RoundedRectangle(cornerRadius: LX.R.md).strokeBorder(LX.C.accent.opacity(focused ? 0.7 : 0), lineWidth: 2))

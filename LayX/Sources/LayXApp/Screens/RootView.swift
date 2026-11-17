@@ -16,7 +16,7 @@ struct RootView: View {
             Backdrop()
             HStack(spacing: seamless ? 0 : LX.S.s2) {
                 Sidebar()
-                    .frame(width: LX.S.sidebar + (seamless ? LX.S.s2 : 0))
+                    .frame(width: LX.S.sidebar + (seamless ? 2 * LX.S.s2 : 0))
                     .overlay { panelDismissCatcher }
                 if seamless { LayoutHairline() }
                 content
@@ -101,8 +101,9 @@ struct Sidebar: View {
         }
         .padding(.horizontal, 8)
         .padding(.bottom, 8)
-        // Seamless: the window has no outer margin, so the sidebar adds it (traffic lights keep their place).
-        .padding([.leading, .vertical], seamless ? LX.S.s2 : 0)
+        // Seamless: the window has no outer margin, so the sidebar adds it on both sides (traffic lights keep
+        // their place, and the selected row sits centred between the window edge and the hairline).
+        .padding(.all, seamless ? LX.S.s2 : 0)
         .pane(layout: true)
     }
 

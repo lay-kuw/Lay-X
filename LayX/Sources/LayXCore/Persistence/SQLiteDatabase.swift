@@ -184,7 +184,15 @@ public actor SQLiteDatabase {
             case .null: rc = sqlite3_bind_null(stmt, idx)
             case .int(let v): rc = sqlite3_bind_int64(stmt, idx, v)
             case .double(let v): rc = sqlite3_bind_double(stmt, idx, v)
-            case .text(let v): rc = sqlite3_bind_text(stmt, idx, v, -1, transient)
+            case .text(let v):
+                // Explicit UTF-8 byte length: a NUL inside the text must not end it (−1 means "up to the first NUL").
+                var utf8 = Array(v.utf8)
+                let count = Int32(utf8.count)
+                rc = utf8.withUnsafeMutableBufferPointer { buf in
+                    buf.baseAddress.map { base in
+                        base.withMemoryRebound(to: CChar.self, capacity: buf.count) { sqlite3_bind_text(stmt, idx, $0, count, transient) }
+                    } ?? sqlite3_bind_text(stmt, idx, "", 0, transient)
+                }
             case .blob(let v):
                 rc = v.withUnsafeBytes { sqlite3_bind_blob(stmt, idx, $0.baseAddress, Int32($0.count), transient) }
             }
@@ -201,7 +209,16 @@ public actor SQLiteDatabase {
             switch sqlite3_column_type(stmt, i) {
             case SQLITE_INTEGER: values[name] = .int(sqlite3_column_int64(stmt, i))
             case SQLITE_FLOAT: values[name] = .double(sqlite3_column_double(stmt, i))
-            case SQLITE_TEXT: values[name] = .text(String(cString: sqlite3_column_text(stmt, i)))
+            case SQLITE_TEXT:
+                // Read by byte count (not up to the first NUL), so text with NUL characters round-trips.
+                // column_text first, then column_bytes (SQLite's documented order for a stable length).
+                let ptr = sqlite3_column_text(stmt, i)
+                let count = Int(sqlite3_column_bytes(stmt, i))
+                if let ptr, count > 0 {
+                    values[name] = .text(String(decoding: UnsafeBufferPointer(start: ptr, count: count), as: UTF8.self))
+                } else {
+                    values[name] = .text("")
+                }
             case SQLITE_BLOB:
                 let count = Int(sqlite3_column_bytes(stmt, i))
                 if let ptr = sqlite3_column_blob(stmt, i), count > 0 {

@@ -62,14 +62,12 @@ public struct ImageHistoryStore: Sendable {
     public func loadAll() async throws -> [ImageRecord] {
         let rows = try await db.query("SELECT * FROM image_generation ORDER BY created_at DESC")
         var out: [ImageRecord] = []
-        var missing: [String] = []
         for row in rows {
             guard let idText = row["id"].text, let id = UUID(uuidString: idText), let file = row["file"].text,
                   Self.isSafeName(file) else { continue }
-            guard FileManager.default.fileExists(atPath: folder.appendingPathComponent(file).path) else {
-                missing.append(idText)
-                continue
-            }
+            // A missing file is hidden, never deleted from the history: the folder may be on a disconnected drive
+            // or mid-move, and the record must come back with it.
+            guard FileManager.default.fileExists(atPath: folder.appendingPathComponent(file).path) else { continue }
             out.append(ImageRecord(
                 id: id, createdAt: Date(timeIntervalSince1970: row["created_at"].double ?? 0),
                 prompt: row["prompt"].text ?? "", negativePrompt: row["negative"].text ?? "",
@@ -79,7 +77,6 @@ public struct ImageHistoryStore: Sendable {
                 loras: row["loras"].text ?? "", strength: row["strength"].double ?? 0,
                 file: file, duration: (row["duration_ms"].double ?? 0) / 1000))
         }
-        for id in missing { try? await db.execute("DELETE FROM image_generation WHERE id = ?", [.text(id)]) }
         return out
     }
 

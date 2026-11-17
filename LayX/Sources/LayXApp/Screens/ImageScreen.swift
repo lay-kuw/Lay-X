@@ -393,7 +393,7 @@ struct ImageComposer: View {
                             set: { text in
                                 let digits = text.filter(\.isNumber)
                                 if let n = Int(digits.prefix(3)), n > 0 { count = min(n, ImageStudio.maxCount) }
-                            }), mono: true)
+                            }), mono: true, clearable: false)
                             .frame(width: 52)
                             .help("Any number up to \(ImageStudio.maxCount)")
                     }

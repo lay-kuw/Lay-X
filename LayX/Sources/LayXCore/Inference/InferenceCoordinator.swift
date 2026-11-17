@@ -52,6 +52,8 @@ public actor InferenceCoordinator {
     private var owner: Owner?
     private var waiters: [(id: UUID, owner: Owner, continuation: CheckedContinuation<Void, Error>)] = []
     private var overlay: (id: UUID, client: InferenceClient)?
+    /// Overlays that became the gate's owner because the paused generation under them ended first.
+    private var promotedOverlays: Set<UUID> = []
     private var overlayWaiters: [(id: UUID, client: InferenceClient, continuation: CheckedContinuation<Void, Error>)] = []
     /// Running generation tasks, so lifecycle changes can cancel them.
     private var generationTasks: [UUID: Task<Void, Never>] = [:]
@@ -110,7 +112,11 @@ public actor InferenceCoordinator {
         let ticket = UUID()
         try await acquire(ticket, as: .lifecycle, bypassLimit: true)
         defer { release() }
+        return try await performLoad(reference)
+    }
 
+    /// The load itself; the caller holds the gate.
+    private func performLoad(_ reference: ModelReference) async throws -> LoadedModelInfo {
         if model.loadedModel != nil { await engine.unload() }
         model = .loading(id: reference.id, progress: 0)
         publish()
@@ -184,7 +190,7 @@ public actor InferenceCoordinator {
     public func exclusive<T: Sendable>(client: InferenceClient, _ body: @Sendable () async throws -> T) async throws -> T {
         let id = UUID()
         let slot = try await acquireGeneration(id, client: client, gate: nil)
-        defer { releaseGeneration(slot) }
+        defer { releaseGeneration(slot, id: id) }
         publish()
         return try await body()
     }
@@ -232,7 +238,22 @@ public actor InferenceCoordinator {
         }
         defer {
             req.pauseGate?.markDone()
-            releaseGeneration(slot)
+            releaseGeneration(slot, id: id)
+        }
+        // A request pinned to a model switches to it here, in its turn: nothing else runs or starts meanwhile.
+        if let wanted = req.model, model.loadedModel?.id != wanted.id {
+            guard slot == .primary else {
+                // Running on top of a paused generation: switching would pull the model out from under it.
+                continuation.finish(throwing: InferenceError.lifecycleChanged)
+                return
+            }
+            do {
+                await beforeLoad?(wanted)
+                _ = try await performLoad(wanted)
+            } catch {
+                continuation.finish(throwing: error)
+                return
+            }
         }
         guard model.loadedModel != nil else {
             continuation.finish(throwing: InferenceError.noModelLoaded)
@@ -345,9 +366,23 @@ public actor InferenceCoordinator {
         publish()
     }
 
-    private func releaseGeneration(_ slot: Slot) {
+    private func releaseGeneration(_ slot: Slot, id: UUID) {
         switch slot {
-        case .primary: release()
+        case .primary:
+            if let running = overlay {
+                // The paused generation ended (e.g. Work was stopped) while an interactive request runs on top:
+                // that request now owns the gate, so nothing else can start until it finishes too.
+                owner = .generation(running.id, running.client, nil)
+                promotedOverlays.insert(running.id)
+                overlay = nil
+                for w in overlayWaiters.reversed() { waiters.insert((w.id, .generation(w.id, w.client, nil), w.continuation), at: 0) }
+                overlayWaiters.removeAll()
+                publish()
+            } else {
+                release()
+            }
+        case .overlay where promotedOverlays.remove(id) != nil:
+            release()
         case .overlay:
             if !overlayWaiters.isEmpty, case .generation(_, let c, _)? = owner, c.isPreemptible {
                 let next = overlayWaiters.removeFirst()

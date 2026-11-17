@@ -67,7 +67,7 @@ struct Harness {
         let deps = APIServerDependencies(
             coordinator: coordinator,
             installedModels: { ["mlx-community/Test-4bit", "mlx-community/Other-4bit"] },
-            loadModel: { id in _ = try await coordinator.load(ModelReference(id: id, directory: URL(fileURLWithPath: "/tmp"))) },
+            modelReference: { id in ["mlx-community/Test-4bit", "mlx-community/Other-4bit"].contains(id) ? ModelReference(id: id, directory: URL(fileURLWithPath: "/tmp")) : nil },
             defaultModel: { "mlx-community/Test-4bit" },
             keys: keys, log: { log.add($0) })
         return Application(router: APIRoutes.router(deps, configuration: config))
@@ -352,7 +352,7 @@ func object(_ b: ByteBuffer) throws -> [String: Any] {
 @Suite(.serialized) struct APIServerLifecycleTests {
     @Test func startStopAndPortConflict() async throws {
         let h = try await Harness()
-        let deps = APIServerDependencies(coordinator: h.coordinator, installedModels: { [] }, loadModel: { _ in },
+        let deps = APIServerDependencies(coordinator: h.coordinator, installedModels: { [] }, modelReference: { _ in nil },
                                          defaultModel: { nil }, keys: h.keys, log: { _ in })
         let port = Int.random(in: 41000...49000)
         let a = APIServerController(deps: deps)
@@ -382,7 +382,8 @@ func object(_ b: ByteBuffer) throws -> [String: Any] {
         let engine = FakeEngine(tokens: Array(repeating: "x", count: 500), delay: .milliseconds(5))
         let h = try await Harness(engine: engine)
         let deps = APIServerDependencies(coordinator: h.coordinator, installedModels: { ["mlx-community/Test-4bit"] },
-                                         loadModel: { _ in }, defaultModel: { nil }, keys: h.keys, log: { _ in })
+                                         modelReference: { id in ModelReference(id: id, directory: URL(fileURLWithPath: "/tmp")) },
+                                         defaultModel: { nil }, keys: h.keys, log: { _ in })
         let port = Int.random(in: 41000...49000)
         let server = APIServerController(deps: deps)
         await server.start(.init(port: port))

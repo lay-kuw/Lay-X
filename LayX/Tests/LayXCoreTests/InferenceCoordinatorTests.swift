@@ -186,6 +186,50 @@ import Testing
         #expect(await c.snapshot.pausedClient == nil)
     }
 
+    /// Review finding: stopping Work while Chat runs on top of it released the gate, so an API request ran at the
+    /// same time as the chat.
+    @Test func stoppingPausedWorkKeepsTheGateForTheRunningChat() async throws {
+        let engine = ScriptedEngine(tokens: Array(repeating: "w", count: 200), tokenDelay: .milliseconds(3))
+        let c = InferenceCoordinator(engine: engine)
+        try await c.load(ref)
+        let work = Task { try await collect(c.generate(request(.work))) }
+        try await Task.sleep(for: .milliseconds(20))
+        await engine.setTokens(Array(repeating: "c", count: 30))
+        let chat = Task { try await collect(c.generate(request(.chat))) }
+        try await Task.sleep(for: .milliseconds(20))
+        work.cancel()                                     // Work stopped while the chat is generating
+        try await Task.sleep(for: .milliseconds(10))
+        await engine.setTokens(Array(repeating: "a", count: 5))
+        let api = Task { try await collect(c.generate(request(.api))) }
+        _ = try await chat.value
+        _ = try await api.value
+        let log = await engine.emissionLog
+        let lastChat = try #require(log.lastIndex(of: .chat)), firstAPI = try #require(log.firstIndex(of: .api))
+        #expect(lastChat < firstAPI, "the API request waited for the chat")
+        #expect(await c.snapshot.activeClient == nil)
+        #expect(await c.isIdleWithModel)
+    }
+
+    /// Review finding: the API checked "idle" and then loaded, so another request could slip in between, and a
+    /// load cancelled running generations. A pinned request now switches models in its own turn.
+    @Test func pinnedModelSwitchesInItsTurnWithoutCancellingOthers() async throws {
+        let engine = ScriptedEngine(tokens: Array(repeating: "c", count: 20), tokenDelay: .milliseconds(3))
+        let c = InferenceCoordinator(engine: engine)
+        try await c.load(ref)
+        let chat = Task { try await collect(c.generate(request(.chat))) }
+        try await Task.sleep(for: .milliseconds(10))
+        var pinned = request(.api)
+        let other = ModelReference(id: "test/other", directory: URL(fileURLWithPath: "/tmp/none"))
+        pinned.model = other
+        let api = Task { try await collect(c.generate(pinned)) }
+        let (chatText, _) = try await chat.value
+        #expect(chatText.count == 20, "the running chat was not cancelled by the switch")
+        _ = try await api.value
+        #expect(await c.snapshot.model.loadedModel?.id == "test/other")
+        let log = await engine.emissionLog
+        #expect(log.lastIndex(of: .chat)! < log.firstIndex(of: .api)!)
+    }
+
     @Test func workDoesNotPreemptChatAndBenchmarkIsNotPreempted() async throws {
         let engine = ScriptedEngine(tokens: Array(repeating: "y", count: 15), tokenDelay: .milliseconds(3))
         let c = InferenceCoordinator(engine: engine)

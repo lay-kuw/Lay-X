@@ -242,54 +242,41 @@ final class AppServices {
     }
 
     /// Moves the generated images (PNG files) to `chosen` (nil = default) and keeps the history pointing at them.
-    /// Returns a message for the user.
+    /// Staged so nothing is lost: conflicts are checked first, files are copied and verified, the setting switches,
+    /// and only then are the originals removed. Any failure leaves everything as it was. Returns a user message.
     func changeImagesFolder(to chosen: URL?) async -> String {
         guard !images.isBusy else { return "Wait for the image generation to finish." }
         guard let old = Self.imagesFolder(), let target = chosen ?? (try? ImageHistoryStore.defaultFolder()) else {
             return "That folder can’t be used."
         }
         do {
-            let moved = try await Self.moveFiles(from: old, to: target) { $0.hasSuffix(".png") }
-            if chosen == nil { UserDefaults.standard.removeObject(forKey: Self.imagesFolderKey) }
-            else { UserDefaults.standard.set(target.path, forKey: Self.imagesFolderKey) }
+            let moved = try await FolderRelocation.relocate(from: old, to: target) { $0.hasSuffix(".png") } switchOver: {
+                if chosen == nil { UserDefaults.standard.removeObject(forKey: Self.imagesFolderKey) }
+                else { UserDefaults.standard.set(target.path, forKey: Self.imagesFolderKey) }
+            }
             await images.replaceStore(database.flatMap(Self.imageStore))
             return "Images are now saved in \((target.path as NSString).abbreviatingWithTildeInPath)\(moved > 0 ? " (\(moved) moved)" : "")."
         } catch {
-            return "The images couldn’t be moved: \(error.localizedDescription)"
+            return (error as? LocalizedError)?.errorDescription ?? "The images couldn’t be moved: \(error.localizedDescription)"
         }
     }
 
-    /// Moves the LoRA files to `chosen` (nil = default).
+    /// Moves the LoRA files to `chosen` (nil = default), staged like `changeImagesFolder`.
     func changeLoRAFolder(to chosen: URL?) async -> String {
         guard !images.isBusy else { return "Wait for the image generation to finish." }
         guard let old = Self.loraFolder(), let target = chosen ?? (try? LoRALibrary.defaultFolder()) else { return "That folder can’t be used." }
         do {
-            let moved = try await Self.moveFiles(from: old, to: target) { $0.lowercased().hasSuffix(".safetensors") }
-            if chosen == nil { UserDefaults.standard.removeObject(forKey: Self.loraFolderKey) }
-            else { UserDefaults.standard.set(target.path, forKey: Self.loraFolderKey) }
+            let moved = try await FolderRelocation.relocate(from: old, to: target) { $0.lowercased().hasSuffix(".safetensors") } switchOver: {
+                if chosen == nil { UserDefaults.standard.removeObject(forKey: Self.loraFolderKey) }
+                else { UserDefaults.standard.set(target.path, forKey: Self.loraFolderKey) }
+            }
             images.replaceLoRALibrary(LoRALibrary(folder: target))
             return "LoRAs are now kept in \((target.path as NSString).abbreviatingWithTildeInPath)\(moved > 0 ? " (\(moved) moved)" : "")."
         } catch {
-            return "The LoRAs couldn’t be moved: \(error.localizedDescription)"
+            return (error as? LocalizedError)?.errorDescription ?? "The LoRAs couldn’t be moved: \(error.localizedDescription)"
         }
     }
 
-    /// Moves matching files (top level only); a file already present at the target is kept and the original left.
-    private static func moveFiles(from old: URL, to new: URL, matching: @escaping @Sendable (String) -> Bool) async throws -> Int {
-        try await Task.detached(priority: .userInitiated) {
-            let fm = FileManager.default
-            try fm.createDirectory(at: new, withIntermediateDirectories: true)
-            guard ModelStore.canonicalPath(old) != ModelStore.canonicalPath(new) else { return 0 }
-            var moved = 0
-            for name in (try? fm.contentsOfDirectory(atPath: old.path)) ?? [] where matching(name) && !name.hasPrefix(".") {
-                let target = new.appendingPathComponent(name)
-                guard !fm.fileExists(atPath: target.path) else { continue }
-                try fm.moveItem(at: old.appendingPathComponent(name), to: target)
-                moved += 1
-            }
-            return moved
-        }.value
-    }
 
     /// The model used when a chat needs one and none is loaded: the configured default if installed, else the
     /// most recently used, else the first installed model.

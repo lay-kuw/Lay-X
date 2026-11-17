@@ -3,6 +3,19 @@ import Testing
 @testable import LayXCore
 
 @Suite struct SQLiteDatabaseTests {
+    /// Review finding: text was bound and read as C strings, so everything after a NUL was lost.
+    @Test func textWithNULRoundTrips() async throws {
+        let db = try SQLiteDatabase(location: .inMemory, migrations: [])
+        try await db.execute("CREATE TABLE t (v TEXT)")
+        for value in ["before\0after", "\0", "", "日本語\0🎨 ok"] {
+            try await db.execute("DELETE FROM t")
+            try await db.execute("INSERT INTO t (v) VALUES (?)", [.text(value)])
+            let rows = try await db.query("SELECT v, length(CAST(v AS BLOB)) AS n FROM t")
+            #expect(rows.first?["v"].text == value)
+            #expect(rows.first?["n"].int == Int64(value.utf8.count))
+        }
+    }
+
     @Test func migrationsSetUserVersionAndCreateTables() async throws {
         let db = try SQLiteDatabase(location: .inMemory, migrations: LayXSchema.migrations)
         #expect(try await db.userVersion() == 6)

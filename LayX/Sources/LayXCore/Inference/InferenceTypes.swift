@@ -115,6 +115,9 @@ public struct GenerationRequest: Sendable {
     public var cacheKey: String?
     /// Set by the coordinator for preemptible requests.
     public var pauseGate: PauseGate?
+    /// Run on this model: the coordinator loads it, if another one is loaded, after this request's turn in the
+    /// queue comes and before generating — so selection, loading and generation can't be split by other requests.
+    public var model: ModelReference?
 
     public init(messages: [PromptMessage], parameters: GenerationParameters, client: InferenceClient, thinking: Bool? = nil,
                 cacheKey: String? = nil) {

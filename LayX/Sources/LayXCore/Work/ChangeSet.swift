@@ -153,15 +153,13 @@ public enum ChangeSetBuilder {
                     var newText = block.content
                     if original.text.hasSuffix("\n") == false, newText.hasSuffix("\n") { newText.removeLast() }
                     guard newText != original.text else { rejected.append((path, "no changes")); continue }
+                    let d = LineDiff.diff(old: original.text, new: newText)
                     changes.append(ProposedChange(
-                        path: path, kind: .modify, original: original, newText: newText,
-                        diff: LineDiff.unified(old: original.text, new: newText),
-                        stats: LineDiff.stats(old: original.text, new: newText)))
+                        path: path, kind: .modify, original: original, newText: newText, diff: d.lines, stats: d.stats))
                 } else {
+                    let d = LineDiff.diff(old: "", new: block.content)
                     changes.append(ProposedChange(
-                        path: path, kind: .create, original: nil, newText: block.content,
-                        diff: LineDiff.unified(old: "", new: block.content),
-                        stats: LineDiff.stats(old: "", new: block.content)))
+                        path: path, kind: .create, original: nil, newText: block.content, diff: d.lines, stats: d.stats))
                 }
                 seen.insert(path)
             } catch {

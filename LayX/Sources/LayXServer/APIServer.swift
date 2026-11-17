@@ -63,19 +63,19 @@ public struct APIServerDependencies: Sendable {
     public var coordinator: InferenceCoordinator
     /// Installed model ids (served by `/v1/models`).
     public var installedModels: @Sendable () async -> [String]
-    /// Loads an installed model by id (called only when the coordinator is idle).
-    public var loadModel: @Sendable (String) async throws -> Void
+    /// The installed model with this id (the coordinator loads it in the request's turn when needed).
+    public var modelReference: @Sendable (String) async -> ModelReference?
     /// Model to load when nothing is loaded and the request doesn't name one.
     public var defaultModel: @Sendable () async -> String?
     public var keys: any APIKeyStoring
     public var log: @Sendable (APIRequestRecord) -> Void
 
     public init(coordinator: InferenceCoordinator, installedModels: @escaping @Sendable () async -> [String],
-                loadModel: @escaping @Sendable (String) async throws -> Void, defaultModel: @escaping @Sendable () async -> String?,
+                modelReference: @escaping @Sendable (String) async -> ModelReference?, defaultModel: @escaping @Sendable () async -> String?,
                 keys: any APIKeyStoring, log: @escaping @Sendable (APIRequestRecord) -> Void) {
         self.coordinator = coordinator
         self.installedModels = installedModels
-        self.loadModel = loadModel
+        self.modelReference = modelReference
         self.defaultModel = defaultModel
         self.keys = keys
         self.log = log
@@ -150,8 +150,12 @@ public enum APIRoutes {
                 } catch {
                     throw APIError.invalid("Request body is not a valid chat completion request: \(Self.describe(decodingError: error))")
                 }
-                let (genRequest, stops) = try validate(parsed)
-                let modelID = try await resolveModel(parsed.model, deps: deps, allowSwitching: configuration.allowModelSwitching)
+                let validated = try validate(parsed)
+                var genRequest = validated.0
+                let stops = validated.1
+                let (modelID, reference) = try await resolveModel(parsed.model, deps: deps, allowSwitching: configuration.allowModelSwitching)
+                // Pinned: the response's `model` is always the model that generated it.
+                genRequest.model = reference
                 record.model = modelID
                 let id = "chatcmpl-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(24).lowercased()
                 let created = Int(Date().timeIntervalSince1970)
@@ -290,17 +294,26 @@ public enum APIRoutes {
         return (GenerationRequest(messages: messages, parameters: params, client: .api, thinking: r.chat_template_kwargs?.enable_thinking), stops)
     }
 
-    static func resolveModel(_ requested: String?, deps: APIServerDependencies, allowSwitching: Bool = true) async throws -> String {
+    /// The model a request runs on. Nothing is loaded here: the coordinator switches to it in the request's turn
+    /// (`GenerationRequest.model`), so a check and a load can never be separated by another request.
+    static func resolveModel(_ requested: String?, deps: APIServerDependencies, allowSwitching: Bool = true) async throws
+        -> (id: String, reference: ModelReference) {
         let snapshot = await deps.coordinator.snapshot
         let loaded = snapshot.model.loadedModel?.id
         let name = requested?.trimmingCharacters(in: .whitespaces)
+        func reference(_ id: String) async throws -> (String, ModelReference) {
+            guard let ref = await deps.modelReference(id) else {
+                throw APIError(status: .notFound, message: "The model “\(id)” is not installed in Lay X.",
+                               type: "invalid_request_error", code: "model_not_found", param: "model")
+            }
+            return (id, ref)
+        }
         if name == nil || name == "" || name == "default" || name == loaded {
-            if let loaded { return loaded }
+            if let loaded { return try await reference(loaded) }
             guard let fallback = await deps.defaultModel() else {
                 throw APIError(status: .serviceUnavailable, message: "No model is installed in Lay X.", type: "server_error", code: "model_not_loaded")
             }
-            try await deps.loadModel(fallback)
-            return fallback
+            return try await reference(fallback)
         }
         guard let name, await deps.installedModels().contains(name) else {
             throw APIError(status: .notFound, message: "The model “\(requested ?? "")” is not installed in Lay X.",
@@ -310,13 +323,12 @@ public enum APIRoutes {
             throw APIError(status: .badRequest, message: "Model switching via the model field is disabled. The loaded model is “\(loaded ?? "")”.",
                            type: "invalid_request_error", code: "model_switching_disabled", param: "model")
         }
-        // Switching models would cancel other users' generations; only do it when idle.
+        // Policy: don't take the model away from someone mid-generation (the switch itself is race-free).
         guard snapshot.activeClient == nil, snapshot.queuedCount == 0 else {
             throw APIError(status: .serviceUnavailable, message: "Another model is busy. Retry shortly or use “\(loaded ?? "default")”.",
                            type: "server_error", code: "model_busy")
         }
-        try await deps.loadModel(name)
-        return name
+        return try await reference(name)
     }
 
     // MARK: Helpers

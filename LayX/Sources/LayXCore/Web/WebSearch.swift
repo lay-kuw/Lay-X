@@ -112,7 +112,11 @@ public struct WebClient: Sendable {
         guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http", let host = url.host, !host.isEmpty else {
             throw WebSearchError.blockedURL(url.absoluteString)
         }
-        if !allowPrivateHost && Self.isPrivateHost(host) { throw WebSearchError.blockedURL(host) }
+        if !allowPrivateHost {
+            // Name and resolved addresses: a public-looking name that resolves inside the network is refused too.
+            if Self.isPrivateHost(host) { throw WebSearchError.blockedURL(host) }
+            if await Self.resolvesToPrivateAddress(host) { throw WebSearchError.blockedURL(host) }
+        }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
         request.httpMethod = "GET"
         request.httpBody = nil
@@ -122,7 +126,17 @@ public struct WebClient: Sendable {
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
         let (bytes, response): (URLSession.AsyncBytes, URLResponse)
         do {
-            (bytes, response) = try await session.bytes(for: request)
+            // Each redirect is checked *before* it is followed (a blocked one is not requested at all).
+            let guardian = RedirectGuard(allowPrivate: allowPrivateHost)
+            do {
+                (bytes, response) = try await session.bytes(for: request, delegate: guardian)
+            } catch {
+                if let blocked = guardian.blocked { throw WebSearchError.blockedURL(blocked) }
+                throw error
+            }
+            if let blocked = guardian.blocked { throw WebSearchError.blockedURL(blocked) }
+        } catch let error as WebSearchError {
+            throw error
         } catch {
             throw WebSearchError.network(error.localizedDescription)
         }
@@ -139,6 +153,66 @@ public struct WebClient: Sendable {
         return (data, http)
     }
 
+    /// True when any address `host` resolves to is loopback, private, link-local, multicast or unspecified.
+    /// (Numeric forms such as `2130706433` or `::ffff:127.0.0.1` are normalised by the resolver.) Unresolvable
+    /// names are left to the request, which then fails on its own.
+    static func resolvesToPrivateAddress(_ host: String) async -> Bool {
+        await Task.detached(priority: .userInitiated) { () -> Bool in
+            var hints = addrinfo()
+            hints.ai_socktype = SOCK_STREAM
+            var result: UnsafeMutablePointer<addrinfo>?
+            let name = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            guard getaddrinfo(name, nil, &hints, &result) == 0, let first = result else { return false }
+            defer { freeaddrinfo(first) }
+            var cursor: UnsafeMutablePointer<addrinfo>? = first
+            while let info = cursor {
+                if let addr = info.pointee.ai_addr, isPrivateAddress(addr) { return true }
+                cursor = info.pointee.ai_next
+            }
+            return false
+        }.value
+    }
+
+    static func isPrivateAddress(_ addr: UnsafePointer<sockaddr>) -> Bool {
+        switch Int32(addr.pointee.sa_family) {
+        case AF_INET:
+            let v4 = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { UInt32(bigEndian: $0.pointee.sin_addr.s_addr) }
+            return isPrivateIPv4(v4)
+        case AF_INET6:
+            let bytes = addr.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { p in
+                withUnsafeBytes(of: p.pointee.sin6_addr) { Array($0) }
+            }
+            return isPrivateIPv6(bytes)
+        default:
+            return true   // unknown families are not web hosts
+        }
+    }
+
+    static func isPrivateIPv4(_ a: UInt32) -> Bool {
+        let b0 = a >> 24, b1 = (a >> 16) & 0xFF
+        switch (b0, b1) {
+        case (0, _), (10, _), (127, _): return true
+        case (169, 254), (192, 168): return true
+        case (172, 16...31): return true
+        case (100, 64...127): return true          // CGNAT
+        case (192, 0) where (a >> 8) & 0xFF == 0: return true   // 192.0.0.0/24
+        default: return b0 >= 224                   // multicast, reserved, broadcast
+        }
+    }
+
+    static func isPrivateIPv6(_ b: [UInt8]) -> Bool {
+        guard b.count == 16 else { return true }
+        if b.allSatisfy({ $0 == 0 }) { return true }                                  // ::
+        if b[0..<15].allSatisfy({ $0 == 0 }) && b[15] == 1 { return true }            // ::1
+        if b[0..<10].allSatisfy({ $0 == 0 }) && b[10] == 0xFF && b[11] == 0xFF {      // ::ffff:a.b.c.d
+            return isPrivateIPv4(UInt32(b[12]) << 24 | UInt32(b[13]) << 16 | UInt32(b[14]) << 8 | UInt32(b[15]))
+        }
+        if b[0] == 0xFE && (b[1] & 0xC0) == 0x80 { return true }                    // fe80::/10 link-local
+        if (b[0] & 0xFE) == 0xFC { return true }                                     // fc00::/7 unique local
+        if b[0] == 0xFF { return true }                                              // multicast
+        return false
+    }
+
     /// Loopback, private (RFC 1918 / ULA), link-local and `.local` hosts.
     public static func isPrivateHost(_ host: String) -> Bool {
         let h = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
@@ -153,6 +227,35 @@ public struct WebClient: Sendable {
         case (100, 64...127): return true  // CGNAT
         default: return false
         }
+    }
+}
+
+/// Per-request redirect check: a redirect to a private host (by name or resolved address) is not followed.
+final class RedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let allowPrivate: Bool
+    private let lock = NSLock()
+    private var _blocked: String?
+    var blocked: String? { lock.withLock { _blocked } }
+
+    init(allowPrivate: Bool) { self.allowPrivate = allowPrivate }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest) async -> URLRequest? {
+        guard !allowPrivate else { return request }
+        guard let url = request.url, let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
+              let host = url.host, !host.isEmpty else {
+            lock.withLock { _blocked = request.url?.absoluteString ?? "redirect" }
+            return nil
+        }
+        if WebClient.isPrivateHost(host) {
+            lock.withLock { _blocked = host }
+            return nil
+        }
+        if await WebClient.resolvesToPrivateAddress(host) {
+            lock.withLock { _blocked = host }
+            return nil
+        }
+        return request
     }
 }
 

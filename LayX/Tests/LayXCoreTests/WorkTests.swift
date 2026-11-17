@@ -386,3 +386,51 @@ struct TempProject {
         #expect(MentionCompleter.apply(folder, to: "@So") == "@Sources/Chat/")
     }
 }
+
+/// Review finding: the diff kept every round's full vector (memory blow-up on big changes), ran twice and on the
+/// main actor. Its output must stay a correct edit script.
+@Suite struct LineDiffBoundsTests {
+    /// Applying the ops to `a` must give `b`, and counts must match.
+    func check(_ a: [String], _ b: [String]) {
+        let ops = LineDiff.ops(a, b)
+        var rebuilt: [String] = []
+        var expectA = 0
+        for op in ops {
+            switch op {
+            case .equal(let x, let y): #expect(x == expectA && a[x] == b[y]); rebuilt.append(a[x]); expectA += 1
+            case .delete(let x): #expect(x == expectA); expectA += 1
+            case .insert(let y): rebuilt.append(b[y])
+            }
+        }
+        #expect(expectA == a.count && rebuilt == b)
+    }
+
+    @Test func randomEditsRoundTrip() {
+        var rng = SystemRandomNumberGenerator()
+        for _ in 0..<300 {
+            let a = (0..<Int.random(in: 0...30, using: &rng)).map { _ in "l\(Int.random(in: 0...6, using: &rng))" }
+            var b = a
+            for _ in 0..<Int.random(in: 0...8, using: &rng) {
+                switch Int.random(in: 0...2, using: &rng) {
+                case 0 where !b.isEmpty: b.remove(at: Int.random(in: 0..<b.count, using: &rng))
+                case 1: b.insert("n\(Int.random(in: 0...6, using: &rng))", at: Int.random(in: 0...b.count, using: &rng))
+                default: if !b.isEmpty { b[Int.random(in: 0..<b.count, using: &rng)] = "r" }
+                }
+            }
+            check(a, b)
+        }
+    }
+
+    @Test func hugeRewriteStaysBoundedAndCorrect() {
+        let a = (0..<6000).map { "old line \($0)" }
+        let b = (0..<6000).map { "new line \($0)" }
+        let start = ContinuousClock.now
+        check(a, b)
+        let d = LineDiff.diff(old: a.joined(separator: "\n"), new: b.joined(separator: "\n"))
+        #expect(d.stats.added == 6000 && d.stats.removed == 6000)
+        #expect(ContinuousClock.now - start < .seconds(5))
+        // Shared head and tail don't count against the budget.
+        let c = Array(a.prefix(3000)) + ["changed"] + Array(a.suffix(2999))
+        #expect(LineDiff.diff(old: a.joined(separator: "\n"), new: c.joined(separator: "\n")).stats == DiffStats(added: 1, removed: 1))
+    }
+}

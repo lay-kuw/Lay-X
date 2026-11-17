@@ -45,11 +45,7 @@ final class APIServerModel {
         let deps = APIServerDependencies(
             coordinator: coordinator,
             installedModels: { await MainActor.run { models.installed.map(\.id.description) } },
-            loadModel: { id in
-                let model = await MainActor.run { models.model(id) }
-                guard let model else { throw InferenceError.modelNotFound(id) }
-                _ = try await coordinator.load(model.reference)
-            },
+            modelReference: { id in await MainActor.run { models.model(id)?.reference } },
             defaultModel: { await MainActor.run { AppServices.defaultChatModel(in: models)?.id.description } },
             keys: keyStore,
             log: { [weak self] record in Task { @MainActor in self?.append(record) } })

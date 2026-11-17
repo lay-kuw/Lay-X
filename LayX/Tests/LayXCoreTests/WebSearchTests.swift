@@ -182,3 +182,31 @@ actor FakeResearcher: WebResearching {
         #expect(try await repo.loadAll().first?.messages.last?.sources.first?.title == "Doc")
     }
 }
+
+/// Review finding: redirects were checked after being requested, and only the host name was checked.
+@Suite struct WebPrivateNetworkTests {
+    @Test func resolvedAddressesAreChecked() async {
+        #expect(await WebClient.resolvesToPrivateAddress("localhost"))
+        #expect(await WebClient.resolvesToPrivateAddress("127.0.0.1"))
+        #expect(await WebClient.resolvesToPrivateAddress("2130706433"), "decimal form of 127.0.0.1")
+        #expect(await WebClient.resolvesToPrivateAddress("::ffff:127.0.0.1"))
+        #expect(await WebClient.resolvesToPrivateAddress("[::1]"))
+        #expect(await !WebClient.resolvesToPrivateAddress("8.8.8.8"))
+        #expect(WebClient.isPrivateIPv4(0xA9FE_0001) && WebClient.isPrivateIPv4(0xE000_0001) && !WebClient.isPrivateIPv4(0x0808_0808))
+        #expect(WebClient.isPrivateIPv6([0xFE, 0x80] + Array(repeating: 0, count: 14)))
+        #expect(!WebClient.isPrivateIPv6([0x26, 0x06, 0x47, 0x00] + Array(repeating: 0, count: 11) + [1]))
+    }
+
+    @Test func redirectToPrivateHostIsNotFollowed() async throws {
+        let guardian = RedirectGuard(allowPrivate: false)
+        let task = URLSession.shared.dataTask(with: URL(string: "https://example.com/")!)
+        let response = try #require(HTTPURLResponse(url: URL(string: "https://example.com/")!, statusCode: 302, httpVersion: nil, headerFields: nil))
+        let next = await guardian.urlSession(URLSession.shared, task: task, willPerformHTTPRedirection: response,
+                                             newRequest: URLRequest(url: URL(string: "http://127.0.0.1:8080/admin")!))
+        #expect(next == nil && guardian.blocked == "127.0.0.1")
+        let allowed = RedirectGuard(allowPrivate: false)
+        let ok = await allowed.urlSession(URLSession.shared, task: task, willPerformHTTPRedirection: response,
+                                          newRequest: URLRequest(url: URL(string: "https://93.184.215.14/")!))
+        #expect(ok != nil && allowed.blocked == nil)
+    }
+}

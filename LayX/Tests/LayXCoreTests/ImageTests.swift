@@ -89,12 +89,42 @@ struct ImageHistoryStoreTests {
         #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent(b.file).path))
     }
 
-    @Test func missingFilesAreDropped() async throws {
+    @Test func missingFilesAreHiddenNotForgotten() async throws {
         let (store, dir) = try makeStore(); defer { try? FileManager.default.removeItem(at: dir) }
         let r = try await store.save(png: Data("x".utf8), prompt: "p", negativePrompt: "", modelID: "m", seed: 1, steps: 1,
                                      size: .init(512, 512), duration: 1)
-        try FileManager.default.removeItem(at: try #require(store.url(for: r)))
+        let url = try #require(store.url(for: r))
+        let aside = dir.deletingLastPathComponent().appendingPathComponent("aside-\(UUID().uuidString).png")
+        try FileManager.default.moveItem(at: url, to: aside)
         #expect(try await store.loadAll().isEmpty)
+        // The file comes back (drive reconnected, move finished): so does the record.
+        try FileManager.default.moveItem(at: aside, to: url)
+        #expect(try await store.loadAll().map(\.id) == [r.id])
+    }
+
+    @Test @MainActor func relocationNeverLosesFiles() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("lx-move-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let old = root.appendingPathComponent("old"), new = root.appendingPathComponent("new")
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: new, withIntermediateDirectories: true)
+        for n in ["a.png", "b.png"] { try Data(n.utf8).write(to: old.appendingPathComponent(n)) }
+        try Data("other".utf8).write(to: new.appendingPathComponent("b.png"))
+        // A same-named file at the target: refused before anything is copied or switched.
+        var switched = false
+        await #expect(throws: FolderRelocation.RelocationError.self) {
+            _ = try await FolderRelocation.relocate(from: old, to: new, matching: { $0.hasSuffix(".png") }) { switched = true }
+        }
+        #expect(!switched)
+        #expect(FileManager.default.fileExists(atPath: old.appendingPathComponent("a.png").path))
+        #expect(!FileManager.default.fileExists(atPath: new.appendingPathComponent("a.png").path))
+        #expect(try Data(contentsOf: new.appendingPathComponent("b.png")) == Data("other".utf8))
+        // Without the clash: copied, switched, originals removed.
+        try FileManager.default.removeItem(at: new.appendingPathComponent("b.png"))
+        let moved = try await FolderRelocation.relocate(from: old, to: new, matching: { $0.hasSuffix(".png") }) { switched = true }
+        #expect(moved == 2 && switched)
+        #expect(try Data(contentsOf: new.appendingPathComponent("b.png")) == Data("b.png".utf8))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: old.path).isEmpty)
     }
 
     @Test func fileNamesAreSafe() {

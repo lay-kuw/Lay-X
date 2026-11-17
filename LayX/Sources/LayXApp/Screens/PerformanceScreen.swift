@@ -4,7 +4,7 @@ import LayXCore
 
 struct PerformanceScreen: View {
     enum Mode: Hashable { case live, benchmarks }
-    @State private var mode: Mode = .benchmarks
+    @State private var mode: Mode = .live
     @State private var hoverContext: Int?
     @Environment(InferenceStatusModel.self) private var inference
     private var perf: PerformanceModel { AppServices.shared.performance }
