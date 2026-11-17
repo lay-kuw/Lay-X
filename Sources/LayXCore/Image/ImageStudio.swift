@@ -75,6 +75,8 @@ public final class ImageStudio {
     @ObservationIgnored private let coordinator: InferenceCoordinator
     @ObservationIgnored private var store: ImageHistoryStore?
     @ObservationIgnored private var loras: LoRALibrary?
+    /// Folder of the `__name__` wildcard files (nil = wildcards stay as typed).
+    public let wildcardsFolder: URL?
     @ObservationIgnored private let modelDirectory: @MainActor (ImageModelSpec) -> URL?
     @ObservationIgnored private let availableMemory: @Sendable () -> Int64
     @ObservationIgnored private let allowUnloadingTextModel: @MainActor () -> Bool
@@ -84,7 +86,7 @@ public final class ImageStudio {
     @ObservationIgnored private var generationCounter = 0
 
     public init(engine: any ImageEngine, coordinator: InferenceCoordinator, store: ImageHistoryStore?,
-                loras: LoRALibrary? = nil,
+                loras: LoRALibrary? = nil, wildcardsFolder: URL? = nil,
                 modelDirectory: @escaping @MainActor (ImageModelSpec) -> URL?,
                 availableMemory: @escaping @Sendable () -> Int64,
                 allowUnloadingTextModel: @escaping @MainActor () -> Bool = { true },
@@ -93,6 +95,7 @@ public final class ImageStudio {
         self.coordinator = coordinator
         self.store = store
         self.loras = loras
+        self.wildcardsFolder = wildcardsFolder
         self.modelDirectory = modelDirectory
         self.availableMemory = availableMemory
         self.allowUnloadingTextModel = allowUnloadingTextModel
@@ -121,8 +124,10 @@ public final class ImageStudio {
 
     // MARK: Generation
 
-    /// Most images one run makes.
-    public static let maxCount = 64
+    /// Most images one run makes (enough to leave it running overnight).
+    public static let maxCount = 9999
+    /// A run stops before the images folder's disk gets fuller than this.
+    public static let minFreeDisk: Int64 = 2_000_000_000
 
     public func generate(_ request: ImageRequest, spec: ImageModelSpec) {
         let prompt = request.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -149,6 +154,7 @@ public final class ImageStudio {
         }.prefix(family.maxLoRAs))
         error = nil
         notice = nil
+        expandDynamicPrompts(&req)
         idleTask?.cancel()
         generationCounter += 1
         watchingProgress = true
@@ -159,8 +165,39 @@ public final class ImageStudio {
 
     public func stop() { task?.cancel() }
 
+    /// Dynamic Prompts: each image gets its own expansion, picked from its seed (so a seed reproduces it).
+    private func expandDynamicPrompts(_ req: inout ImageRequest) {
+        let hasPrompt = DynamicPrompt.hasSyntax(req.prompt)
+        let hasNegative = !req.negativePrompt.isEmpty && DynamicPrompt.hasSyntax(req.negativePrompt)
+        guard hasPrompt || hasNegative else { return }
+        let library = WildcardLibrary(folder: wildcardsFolder)
+        var cache: [String: [String]?] = [:]
+        let lookup: (String) -> [String]? = { name in
+            if let hit = cache[name] { return hit }
+            let lines = library.lines(name)
+            cache[name] = lines
+            return lines
+        }
+        var missing = Set<String>()
+        func expand(_ text: String, _ index: Int, salt: UInt64) -> String {
+            let result = DynamicPrompt.expand(text, seed: req.seed(at: index) &+ salt, wildcards: lookup)
+            missing.formUnion(result.missingWildcards)
+            return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if hasPrompt { req.prompts = (0..<req.count).map { expand(req.prompt, $0, salt: 0) } }
+        if hasNegative { req.negativePrompts = (0..<req.count).map { expand(req.negativePrompt, $0, salt: 1) } }
+        if !missing.isEmpty {
+            let names = missing.sorted().map { "__\($0)__" }.joined(separator: ", ")
+            notice = "No wildcard file for \(names) — add \(missing.count == 1 ? "it" : "them") as .txt in the wildcards folder."
+        }
+    }
+
     private func run(_ request: ImageRequest, spec: ImageModelSpec) async {
+        // Long runs keep going with the display off: idle sleep is held off until the run ends.
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleSystemSleepDisabled], reason: "Generating images")
         defer {
+            ProcessInfo.processInfo.endActivity(activity)
             phase = .idle
             task = nil
             watchingProgress = false
@@ -199,9 +236,16 @@ public final class ImageStudio {
                 error = "Images can’t be saved: the local database isn’t available."
                 return
             }
+            if let free = store.availableSpace(), free < Self.minFreeDisk {
+                error = String(format: "Stopped: the disk is almost full (%.1f GB free). %d image%@ saved.",
+                               Double(free) / 1e9, runDone, runDone == 1 ? "" : "s")
+                task?.cancel()
+                return
+            }
             do {
                 let record = try await store.save(
-                    png: png, prompt: request.prompt, negativePrompt: request.cfg > 1 ? request.negativePrompt : "",
+                    png: png, prompt: request.prompt(at: index),
+                    negativePrompt: request.cfg > 1 ? request.negativePrompt(at: index) : "",
                     modelID: spec.id.description, seed: seed, steps: request.steps, cfg: request.cfg, size: request.size,
                     loras: request.loras.map { "\($0.displayName) ×\(String(format: "%.2g", $0.scale))" }.joined(separator: ", "),
                     strength: request.source == nil ? 0 : request.strength,
@@ -368,6 +412,10 @@ public final class ImageStudio {
         history.removeAll { $0.id == record.id }
         if selectedID == record.id { selectedID = history.first?.id }
         guard let store else { return }
-        Task { try? await store.delete(record) }
+        Task {
+            do { try await store.delete(record) } catch {
+                self.error = "The image’s history entry couldn’t be deleted: \(error.localizedDescription)"
+            }
+        }
     }
 }

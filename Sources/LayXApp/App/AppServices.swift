@@ -154,6 +154,7 @@ final class AppServices {
         images = ImageStudio(
             engine: imageEngine, coordinator: coordinator, store: database.flatMap(Self.imageStore),
             loras: Self.loraFolder().map(LoRALibrary.init(folder:)),
+            wildcardsFolder: try? WildcardLibrary.defaultFolder(),
             modelDirectory: { spec in
                 // Current storage folder (it can be changed in Settings).
                 AppServices.shared.models.imageStore.installedModel(spec.id).flatMap { $0.isImageModel ? $0.directory : nil }

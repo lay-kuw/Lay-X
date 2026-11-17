@@ -107,16 +107,27 @@ public actor MLXImageEngine: ImageEngine {
                 let onStep: @Sendable (Int, Int) -> Void = { step, steps in
                     continuation.yield(.progress(index: index, step: step, total: steps))
                 }
+                // This image's prompt (Dynamic Prompts expanded). SDXL weights it on the CLIP embeddings; the
+                // language-model encoders get it without the explicit `(text:1.3)` weights.
+                var single = request
+                single.prompt = request.prompt(at: index)
+                single.negativePrompt = request.negativePrompt(at: index)
+                single.prompts = nil
+                single.negativePrompts = nil
+                if case .sdxl = loaded {} else {
+                    single.prompt = PromptWeighting.stripExplicitWeights(single.prompt)
+                    single.negativePrompt = PromptWeighting.stripExplicitWeights(single.negativePrompt)
+                }
                 let png: Data
                 switch loaded {
                 case .sdxl(let generator, let configuration):
-                    png = try await Self.runSDXL(request, seed: seed, generator: generator, configuration: configuration, onStep: onStep)
+                    png = try await Self.runSDXL(single, seed: seed, generator: generator, configuration: configuration, onStep: onStep)
                 case .klein(let runtime):
-                    png = try runtime.generate(request, seed: seed, onStep: onStep)
+                    png = try runtime.generate(single, seed: seed, onStep: onStep)
                 case .qwen(let runtime):
-                    png = try await runtime.generate(request, seed: seed, onStep: onStep)
+                    png = try await runtime.generate(single, seed: seed, onStep: onStep)
                 case .zImage(let runtime):
-                    png = try runtime.generate(request, seed: seed, onStep: onStep)
+                    png = try runtime.generate(single, seed: seed, onStep: onStep)
                 }
                 Memory.clearCache()
                 continuation.yield(.image(index: index, png: png, seed: seed))
@@ -139,6 +150,8 @@ public actor MLXImageEngine: ImageEngine {
         var parameters = configuration.defaultParameters()
         parameters.prompt = request.prompt
         parameters.negativePrompt = request.negativePrompt
+        parameters.promptSegments = PromptWeighting.parse(request.prompt).map { WeightedText($0.text, Float($0.weight)) }
+        parameters.negativeSegments = PromptWeighting.parse(request.negativePrompt).map { WeightedText($0.text, Float($0.weight)) }
         parameters.steps = request.steps
         parameters.cfgWeight = Float(request.cfg)
         parameters.seed = seed

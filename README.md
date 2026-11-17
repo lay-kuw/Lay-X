@@ -139,6 +139,19 @@ use, so nothing silently does nothing: 🎛️
 Add **LoRA** files (`.safetensors`, kohya / diffusers / PEFT) to change the style or teach a subject — Lay X reads
 each file to see which model it's for and greys out the ones that don't fit. 🧩
 
+Prompts understand **Dynamic Prompts** and **emphasis**: 🎲
+
+| Write | Means |
+|---|---|
+| `{red\|green\|blue}` | one option at random, picked again for each image (the seed decides, so it's reproducible) |
+| `{2::red\|blue}` | weighted pick |
+| `{2$$a\|b\|c}` · `{1-3$$a\|b\|c}` · `{2$$ and $$a\|b\|c}` | several distinct options, joined with `, ` (or your own separator) |
+| `__hair__` | a random line of `hair.txt` in the wildcards folder (`__style/anime__` for subfolders) |
+| `(word)` · `((word))` · `[word]` · `(word:1.4)` | emphasis ×1.1 · ×1.21 · ÷1.1 · ×1.4 — SDXL models; the others just drop explicit `:1.4` weights |
+| `\{` `\}` `\|` `\(` `\)` | literal characters |
+
+The history keeps each image's expanded prompt.
+
 Chat and images share one Mac politely: they never use the GPU at the same time, and if memory is tight Lay X
 unloads whichever model is idle (and tells you) so the other one fits. ✨
 
@@ -180,6 +193,7 @@ Anything that speaks the OpenAI chat API can point its base URL at `http://127.0
 | Pinned chats, benchmarks & image history | `~/.config/lay-x/database/LayX.sqlite` (changeable in Settings) |
 | Generated images | `~/.config/lay-x/images` |
 | LoRAs | `~/.config/lay-x/loras` |
+| Wildcards | `~/.config/lay-x/wildcards` (`name.txt`, one option per line) |
 | Temporary chats | nowhere — memory only 🫧 |
 
 ## 🧩 Project layout

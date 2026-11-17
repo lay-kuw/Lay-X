@@ -80,9 +80,20 @@ public struct ImageHistoryStore: Sendable {
         return out
     }
 
-    /// Deletes the record and its file.
+    /// Deletes the record and its file for good: the PNG is removed (not moved to the Trash), the row's text is
+    /// overwritten (`secure_delete`) and the write-ahead log is emptied so no copy of the prompt is left behind.
     public func delete(_ record: ImageRecord) async throws {
+        // The file goes even if the database step fails.
+        defer { if let url = url(for: record) { try? FileManager.default.removeItem(at: url) } }
         try await db.execute("DELETE FROM image_generation WHERE id = ?", [.text(record.id.uuidString)])
-        if let url = url(for: record) { try? FileManager.default.removeItem(at: url) }
+        try? await db.purgeLog()
+    }
+
+    /// Free space on the images folder's volume (bytes; nil = unknown). The plain figure (without purgeable
+    /// space): cheap enough to check after every image, and errs on the safe side.
+    public func availableSpace() -> Int64? {
+        var probe = folder
+        while !FileManager.default.fileExists(atPath: probe.path), probe.pathComponents.count > 1 { probe.deleteLastPathComponent() }
+        return (try? probe.resourceValues(forKeys: [.volumeAvailableCapacityKey]))?.volumeAvailableCapacity.map(Int64.init)
     }
 }

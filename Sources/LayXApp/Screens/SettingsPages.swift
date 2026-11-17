@@ -410,6 +410,11 @@ struct ImageSettings: View {
                         LXButton(title: "Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
                     }
                 }
+                screen.row("Wildcards", "Text files for __name__ in prompts (name.txt, one option per line)") {
+                    if let folder = studio.wildcardsFolder {
+                        LXButton(title: "Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
+                    }
+                }
             }
             screen.group("Images") {
                 screen.row("Saved images", "\(studio.history.count) image\(studio.history.count == 1 ? "" : "s") · PNG files on this Mac") {

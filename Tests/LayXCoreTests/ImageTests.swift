@@ -89,6 +89,29 @@ struct ImageHistoryStoreTests {
         #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent(b.file).path))
     }
 
+    @Test func deletingLeavesNoTraceOnDisk() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lx-imgdb-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let dbURL = dir.appendingPathComponent("t.sqlite")
+        let db = try SQLiteDatabase(location: .file(dbURL), migrations: LayXSchema.migrations)
+        let store = ImageHistoryStore(database: db, folder: dir.appendingPathComponent("images"))
+        let secret = "zq-secret-prompt-\(UUID().uuidString)"
+        let r = try await store.save(png: Data("x".utf8), prompt: secret, negativePrompt: secret + "-neg", modelID: "m",
+                                     seed: 1, steps: 1, size: .init(512, 512), duration: 1)
+        _ = try await store.save(png: Data("y".utf8), prompt: "kept", negativePrompt: "", modelID: "m",
+                                 seed: 2, steps: 1, size: .init(512, 512), duration: 1)
+        try await store.delete(r)
+        #expect(try await store.loadAll().map(\.prompt) == ["kept"])
+        // Neither the database nor its write-ahead log keeps the deleted prompt.
+        for suffix in ["", "-wal", "-journal"] {
+            let file = URL(fileURLWithPath: dbURL.path + suffix)
+            guard let data = try? Data(contentsOf: file) else { continue }
+            #expect(data.range(of: Data(secret.utf8)) == nil, "found in \(file.lastPathComponent)")
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("images").path).count == 1)
+    }
+
     @Test func missingFilesAreHiddenNotForgotten() async throws {
         let (store, dir) = try makeStore(); defer { try? FileManager.default.removeItem(at: dir) }
         let r = try await store.save(png: Data("x".utf8), prompt: "p", negativePrompt: "", modelID: "m", seed: 1, steps: 1,
@@ -303,8 +326,10 @@ struct ImageStudioTests {
     }
 
     func waitIdle(_ studio: ImageStudio) async throws {
+        // `runCount` is set as soon as a run is requested (before its task starts), so a slow start isn't
+        // mistaken for a finished run.
         try await Task.sleep(for: .milliseconds(10))
-        for _ in 0..<500 where studio.isBusy { try await Task.sleep(for: .milliseconds(10)) }
+        for _ in 0..<500 where studio.isBusy || studio.runCount > 0 { try await Task.sleep(for: .milliseconds(10)) }
     }
 
     @Test func generatesAndSavesEachImage() async throws {
@@ -324,6 +349,26 @@ struct ImageStudioTests {
         studio.generate(ImageRequest(prompt: "again", steps: 1, seed: 1), spec: .sdxlTurbo)
         try await waitIdle(studio)
         #expect(await engine.loads == 1)
+    }
+
+    @Test func dynamicPromptsExpandPerImage() async throws {
+        let (studio, dir) = try makeStudio(engine: ScriptedImageEngine(), coordinator: InferenceCoordinator(engine: ScriptedEngine()), free: { .max })
+        defer { try? FileManager.default.removeItem(at: dir) }
+        studio.generate(ImageRequest(prompt: "a {red|blue} (fox:1.2) __nope__", negativePrompt: "{blurry|dark}", steps: 1, cfg: 5,
+                                     seed: 10, count: 8), spec: .sdxlTurbo)
+        try await waitIdle(studio)
+        #expect(studio.history.count == 8)
+        #expect(studio.history.allSatisfy {
+            ["a red (fox:1.2) __nope__", "a blue (fox:1.2) __nope__"].contains($0.prompt) && ["blurry", "dark"].contains($0.negativePrompt)
+        })
+        #expect(Set(studio.history.map(\.prompt)).count == 2)
+        #expect(studio.notice?.contains("__nope__") == true)
+        // The same seed picks the same options again.
+        let first = studio.history.last!
+        studio.generate(ImageRequest(prompt: "a {red|blue} (fox:1.2) __nope__", negativePrompt: "{blurry|dark}", steps: 1, cfg: 5,
+                                     seed: 10, count: 1), spec: .sdxlTurbo)
+        try await waitIdle(studio)
+        #expect(studio.history.first?.prompt == first.prompt && studio.history.first?.negativePrompt == first.negativePrompt)
     }
 
     @Test func unloadsIdleTextModelWhenMemoryIsShort() async throws {

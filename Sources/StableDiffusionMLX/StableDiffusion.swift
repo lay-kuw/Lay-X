@@ -245,24 +245,43 @@ open class StableDiffusion {
         eval(unet, textEncoder, autoencoder)
     }
 
-    func tokenize(tokenizer: CLIPTokenizer, text: String, negativeText: String?) -> MLXArray {
-        var tokens = [tokenizer.tokenize(text: text)]
+    /// Lay X: tokens [c, n] and the emphasis of each token (nil when every weight is 1).
+    func tokenize(tokenizer: CLIPTokenizer, text: [WeightedText], negativeText: [WeightedText]?)
+        -> (tokens: MLXArray, weights: MLXArray?)
+    {
+        var rows = [tokenizer.tokenize(segments: text)]
         if let negativeText {
-            tokens.append(tokenizer.tokenize(text: negativeText))
+            rows.append(tokenizer.tokenize(segments: negativeText))
         }
 
-        let c = tokens.count
-        let max = tokens.map { $0.count }.max() ?? 0
+        let c = rows.count
+        let max = rows.map { $0.tokens.count }.max() ?? 0
         let mlxTokens = MLXArray(
-            tokens
+            rows
                 .map {
-                    ($0 + Array(repeating: 0, count: max - $0.count))
+                    ($0.tokens + Array(repeating: 0, count: max - $0.tokens.count))
                 }
                 .flatMap { $0 }
         )
         .reshaped(c, max)
 
-        return mlxTokens
+        guard rows.contains(where: { $0.weights.contains { $0 != 1 } }) else { return (mlxTokens, nil) }
+        let weights = MLXArray(
+            rows.flatMap { $0.weights + Array(repeating: Float(1), count: max - $0.weights.count) }
+        ).reshaped(c, max)
+        return (mlxTokens, weights)
+    }
+
+    /// Lay X: A1111-style emphasis — scales each token's embedding by its weight, then restores the mean of
+    /// each prompt's embeddings so the overall strength stays the same.
+    func applyEmphasis(_ z: MLXArray, _ weights: MLXArray?) -> MLXArray {
+        guard let weights else { return z }
+        let z32 = z.asType(.float32)
+        let originalMean = z32.mean(axes: [1, 2], keepDims: true)
+        let scaled = z32 * weights[0..., 0..., .newAxis]
+        let newMean = scaled.mean(axes: [1, 2], keepDims: true)
+        let safeMean = MLX.where(MLX.abs(newMean) .< 1e-8, MLXArray(Float(1e-8)), newMean)
+        return (scaled * (originalMean / safeMean)).asType(z.dtype)
     }
 
     open func step(
@@ -305,15 +324,15 @@ open class StableDiffusionBase: StableDiffusion, TextToImageGenerator {
         try super.init(client: client, configuration: configuration, dType: dType)
     }
 
-    func conditionText(text: String, imageCount: Int, cfgWeight: Float, negativeText: String?)
+    func conditionText(text: [WeightedText], imageCount: Int, cfgWeight: Float, negativeText: [WeightedText])
         -> MLXArray
     {
         // tokenize the text
-        let tokens = tokenize(
+        let (tokens, weights) = tokenize(
             tokenizer: tokenizer, text: text, negativeText: cfgWeight > 1 ? negativeText : nil)
 
         // compute the features
-        var conditioning = textEncoder(tokens).lastHiddenState
+        var conditioning = applyEmphasis(textEncoder(tokens).lastHiddenState, weights)
 
         // repeat the conditioning for each of the generated images
         if imageCount > 1 {
@@ -327,8 +346,9 @@ open class StableDiffusionBase: StableDiffusion, TextToImageGenerator {
         MLXRandom.seed(parameters.seed)
 
         let conditioning = conditionText(
-            text: parameters.prompt, imageCount: parameters.imageCount,
-            cfgWeight: parameters.cfgWeight, negativeText: parameters.negativePrompt)
+            text: parameters.promptSegments ?? [WeightedText(parameters.prompt)],
+            imageCount: parameters.imageCount, cfgWeight: parameters.cfgWeight,
+            negativeText: parameters.negativeSegments ?? [WeightedText(parameters.negativePrompt)])
 
         let xt = sampler.samplePrior(
             shape: [parameters.imageCount] + parameters.latentSize + [autoencoder.latentChannels],
@@ -379,20 +399,21 @@ open class StableDiffusionXL: StableDiffusion, TextToImageGenerator, ImageToImag
         return [h, w, 0, 0, h, w]
     }
 
-    func conditionText(text: String, imageCount: Int, cfgWeight: Float, negativeText: String?) -> (
+    func conditionText(text: [WeightedText], imageCount: Int, cfgWeight: Float, negativeText: [WeightedText]) -> (
         MLXArray, MLXArray
     ) {
-        let tokens1 = tokenize(
+        let (tokens1, weights1) = tokenize(
             tokenizer: tokenizer, text: text, negativeText: cfgWeight > 1 ? negativeText : nil)
-        let tokens2 = tokenize(
+        let (tokens2, weights2) = tokenize(
             tokenizer: tokenizer2, text: text, negativeText: cfgWeight > 1 ? negativeText : nil)
 
         let conditioning1 = textEncoder(tokens1)
         let conditioning2 = textEncoder2(tokens2)
+        // Emphasis on the per-token states; the pooled output stays unweighted (as in A1111).
         var conditioning = concatenated(
             [
-                conditioning1.hiddenStates.dropLast().last!,
-                conditioning2.hiddenStates.dropLast().last!,
+                applyEmphasis(conditioning1.hiddenStates.dropLast().last!, weights1),
+                applyEmphasis(conditioning2.hiddenStates.dropLast().last!, weights2),
             ],
             axis: -1)
         var pooledConditionng = conditioning2.pooledOutput
@@ -409,8 +430,9 @@ open class StableDiffusionXL: StableDiffusion, TextToImageGenerator, ImageToImag
         MLXRandom.seed(parameters.seed)
 
         let (conditioning, pooledConditioning) = conditionText(
-            text: parameters.prompt, imageCount: parameters.imageCount,
-            cfgWeight: parameters.cfgWeight, negativeText: parameters.negativePrompt)
+            text: parameters.promptSegments ?? [WeightedText(parameters.prompt)],
+            imageCount: parameters.imageCount, cfgWeight: parameters.cfgWeight,
+            negativeText: parameters.negativeSegments ?? [WeightedText(parameters.negativePrompt)])
 
         let textTime = (
             pooledConditioning,
@@ -438,8 +460,9 @@ open class StableDiffusionXL: StableDiffusion, TextToImageGenerator, ImageToImag
         let numSteps = Int(Float(parameters.steps) * strength)
 
         let (conditioning, pooledConditioning) = conditionText(
-            text: parameters.prompt, imageCount: parameters.imageCount,
-            cfgWeight: parameters.cfgWeight, negativeText: parameters.negativePrompt)
+            text: parameters.promptSegments ?? [WeightedText(parameters.prompt)],
+            imageCount: parameters.imageCount, cfgWeight: parameters.cfgWeight,
+            negativeText: parameters.negativeSegments ?? [WeightedText(parameters.negativePrompt)])
 
         let textTime = (
             pooledConditioning,

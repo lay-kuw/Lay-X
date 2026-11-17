@@ -370,10 +370,10 @@ struct ImageComposer: View {
                             get: { [1, 2, 4, 8, 16, 32].contains(count) ? "" : String(count) },
                             set: { text in
                                 let digits = text.filter(\.isNumber)
-                                if let n = Int(digits.prefix(3)), n > 0 { count = min(n, ImageStudio.maxCount) }
+                                if let n = Int(digits.prefix(4)), n > 0 { count = min(n, ImageStudio.maxCount) }
                             }), mono: true, clearable: false)
-                            .frame(width: 52)
-                            .help("Any number up to \(ImageStudio.maxCount)")
+                            .frame(width: 60)
+                            .help("Any number up to \(ImageStudio.maxCount) — leave a long run going overnight")
                     }
                 }
 

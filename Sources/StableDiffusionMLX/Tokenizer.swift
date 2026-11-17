@@ -116,7 +116,8 @@ class CLIPTokenizer {
         return unigrams
     }
 
-    public func tokenize(text: String) -> [Int32] {
+    /// Token ids of `text` without BOS / EOS.
+    func contentTokens(_ text: String) -> [Int] {
         // Lower case cleanup and split according to self.pat. Hugging Face does
         // a much more thorough job here but this should suffice for 95% of
         // cases.
@@ -126,14 +127,28 @@ class CLIPTokenizer {
 
         // Split the tokens according to the byte-pair merge file
         let bpeTokens = tokens.flatMap { bpe(text: String($0)) }
+        return bpeTokens.compactMap { vocabulary[$0] }
+    }
 
-        // Map to token ids, truncated to CLIP's context length. The text encoder has a fixed
-        // 77-position embedding, so a longer sequence aborts with `[broadcast_shapes]`.
-        // BOS + up to 75 content tokens + EOS = 77.
-        let maxContentTokens = 77 - 2
-        let content = bpeTokens.compactMap { vocabulary[$0] }.prefix(maxContentTokens)
-        let result = [bosToken] + Array(content) + [eosToken]
+    // Truncated to CLIP's context length. The text encoder has a fixed 77-position embedding, so a longer
+    // sequence aborts with `[broadcast_shapes]`. BOS + up to 75 content tokens + EOS = 77.
+    static let maxContentTokens = 77 - 2
 
-        return result.map { Int32($0) }
+    public func tokenize(text: String) -> [Int32] {
+        tokenize(segments: [WeightedText(text)]).tokens
+    }
+
+    /// Lay X: token ids with the emphasis of each token (BOS / EOS at 1).
+    public func tokenize(segments: [WeightedText]) -> (tokens: [Int32], weights: [Float]) {
+        var ids: [Int] = []
+        var weights: [Float] = []
+        for segment in segments {
+            let t = contentTokens(segment.text)
+            ids += t
+            weights += Array(repeating: segment.weight, count: t.count)
+        }
+        let n = min(ids.count, Self.maxContentTokens)
+        let tokens = [bosToken] + ids.prefix(n) + [eosToken]
+        return (tokens.map { Int32($0) }, [1] + weights.prefix(n) + [1])
     }
 }

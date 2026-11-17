@@ -146,6 +146,13 @@ public actor SQLiteDatabase {
         try execute("VACUUM INTO ?", [.text(url.path)])
     }
 
+    /// Moves everything in the write-ahead log into the database and empties the log file, so content just
+    /// deleted (and overwritten by `secure_delete`) no longer survives in old log frames.
+    public func purgeLog() throws {
+        guard let db = handle else { throw DatabaseError.closed }
+        try Self.exec(db, "PRAGMA wal_checkpoint(TRUNCATE);")
+    }
+
     public func userVersion() throws -> Int {
         Int(try query("PRAGMA user_version;").first?["user_version"].int ?? 0)
     }

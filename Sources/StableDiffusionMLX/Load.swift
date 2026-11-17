@@ -52,6 +52,16 @@ public struct LoadConfiguration: Sendable {
 }
 
 /// Parameters for evaluating a stable diffusion prompt and generating latents
+/// Lay X: a run of prompt text and its emphasis (1 = normal).
+public struct WeightedText: Sendable, Hashable {
+    public var text: String
+    public var weight: Float
+    public init(_ text: String, _ weight: Float = 1) {
+        self.text = text
+        self.weight = weight
+    }
+}
+
 public struct EvaluateParameters: Sendable {
 
     /// `cfg` value from the preset
@@ -70,6 +80,9 @@ public struct EvaluateParameters: Sendable {
     public var seed: UInt64
     public var prompt = ""
     public var negativePrompt = ""
+    /// Lay X: the prompts as weighted runs (emphasis syntax already parsed); nil = `prompt` at weight 1.
+    public var promptSegments: [WeightedText]?
+    public var negativeSegments: [WeightedText]?
 
     public init(
         cfgWeight: Float, steps: Int, imageCount: Int = 1, decodingBatchSize: Int = 1,

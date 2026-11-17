@@ -445,6 +445,21 @@ public struct ImageRequest: Sendable, Hashable {
     /// Seed of each image when they aren't consecutive (random per image); nil = seed, seed+1, …
     public var seeds: [UInt64]?
 
+    /// Prompt of each image after Dynamic Prompts expansion; nil = `prompt` for every image.
+    public var prompts: [String]?
+    public var negativePrompts: [String]?
+
+    /// Prompt of image `index` of the batch (still with emphasis syntax).
+    public func prompt(at index: Int) -> String {
+        if let prompts, index < prompts.count { return prompts[index] }
+        return prompt
+    }
+
+    public func negativePrompt(at index: Int) -> String {
+        if let negativePrompts, index < negativePrompts.count { return negativePrompts[index] }
+        return negativePrompt
+    }
+
     /// Seed of image `index` of the batch.
     public func seed(at index: Int) -> UInt64 {
         if let seeds, index < seeds.count { return seeds[index] }
