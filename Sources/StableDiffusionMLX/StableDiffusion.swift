@@ -245,31 +245,46 @@ open class StableDiffusion {
         eval(unet, textEncoder, autoencoder)
     }
 
-    /// Lay X: tokens [c, n] and the emphasis of each token (nil when every weight is 1).
-    func tokenize(tokenizer: CLIPTokenizer, text: [WeightedText], negativeText: [WeightedText]?)
-        -> (tokens: MLXArray, weights: MLXArray?)
+    /// Lay X: encodes the prompt (and the negative prompt, as a second row) chunk by chunk and joins the chunks
+    /// along the sequence. Rows with fewer chunks get empty ones so both rows have the same length; a prompt of
+    /// one chunk is encoded exactly as before. Emphasis is applied to the joined states; `pooled` is the first
+    /// chunk's.
+    func encodeText(tokenizer: CLIPTokenizer, encoder: CLIPTextModel, text: [WeightedText],
+                    negativeText: [WeightedText]?, features: (CLIPOutput) -> MLXArray)
+        -> (states: MLXArray, pooled: MLXArray)
     {
-        var rows = [tokenizer.tokenize(segments: text)]
+        var rows = [tokenizer.tokenizeChunks(segments: text)]
         if let negativeText {
-            rows.append(tokenizer.tokenize(segments: negativeText))
+            rows.append(tokenizer.tokenizeChunks(segments: negativeText))
         }
-
         let c = rows.count
-        let max = rows.map { $0.tokens.count }.max() ?? 0
-        let mlxTokens = MLXArray(
-            rows
-                .map {
-                    ($0.tokens + Array(repeating: 0, count: max - $0.tokens.count))
-                }
-                .flatMap { $0 }
-        )
-        .reshaped(c, max)
+        let chunkCount = rows.map(\.count).max() ?? 1
+        let empty = CLIPTokenizer.Chunk(
+            tokens: [Int32(tokenizer.bosToken), Int32(tokenizer.eosToken)], weights: [1, 1])
+        rows = rows.map { $0 + Array(repeating: empty, count: chunkCount - $0.count) }
+        let weighted = rows.contains { $0.contains { $0.weights.contains { $0 != 1 } } }
 
-        guard rows.contains(where: { $0.weights.contains { $0 != 1 } }) else { return (mlxTokens, nil) }
-        let weights = MLXArray(
-            rows.flatMap { $0.weights + Array(repeating: Float(1), count: max - $0.weights.count) }
-        ).reshaped(c, max)
-        return (mlxTokens, weights)
+        var states: [MLXArray] = []
+        var weights: [MLXArray] = []
+        var pooled: MLXArray?
+        for k in 0 ..< chunkCount {
+            let chunk = rows.map { $0[k] }
+            let n = chunk.map(\.tokens.count).max() ?? 0
+            let tokens = MLXArray(
+                chunk.flatMap { $0.tokens + Array(repeating: 0, count: n - $0.tokens.count) }
+            ).reshaped(c, n)
+            let output = encoder(tokens)
+            states.append(features(output))
+            if k == 0 { pooled = output.pooledOutput }
+            if weighted {
+                weights.append(MLXArray(
+                    chunk.flatMap { $0.weights + Array(repeating: Float(1), count: n - $0.weights.count) }
+                ).reshaped(c, n))
+            }
+        }
+        let joined = states.count == 1 ? states[0] : concatenated(states, axis: 1)
+        let w = weighted ? (weights.count == 1 ? weights[0] : concatenated(weights, axis: 1)) : nil
+        return (applyEmphasis(joined, w), pooled!)
     }
 
     /// Lay X: A1111-style emphasis — scales each token's embedding by its weight, then restores the mean of
@@ -327,12 +342,11 @@ open class StableDiffusionBase: StableDiffusion, TextToImageGenerator {
     func conditionText(text: [WeightedText], imageCount: Int, cfgWeight: Float, negativeText: [WeightedText])
         -> MLXArray
     {
-        // tokenize the text
-        let (tokens, weights) = tokenize(
-            tokenizer: tokenizer, text: text, negativeText: cfgWeight > 1 ? negativeText : nil)
-
-        // compute the features
-        var conditioning = applyEmphasis(textEncoder(tokens).lastHiddenState, weights)
+        // tokenize the text and compute the features
+        var conditioning = encodeText(
+            tokenizer: tokenizer, encoder: textEncoder, text: text,
+            negativeText: cfgWeight > 1 ? negativeText : nil, features: { $0.lastHiddenState }
+        ).states
 
         // repeat the conditioning for each of the generated images
         if imageCount > 1 {
@@ -402,21 +416,15 @@ open class StableDiffusionXL: StableDiffusion, TextToImageGenerator, ImageToImag
     func conditionText(text: [WeightedText], imageCount: Int, cfgWeight: Float, negativeText: [WeightedText]) -> (
         MLXArray, MLXArray
     ) {
-        let (tokens1, weights1) = tokenize(
-            tokenizer: tokenizer, text: text, negativeText: cfgWeight > 1 ? negativeText : nil)
-        let (tokens2, weights2) = tokenize(
-            tokenizer: tokenizer2, text: text, negativeText: cfgWeight > 1 ? negativeText : nil)
-
-        let conditioning1 = textEncoder(tokens1)
-        let conditioning2 = textEncoder2(tokens2)
+        let negative = cfgWeight > 1 ? negativeText : nil
+        let penultimate: (CLIPOutput) -> MLXArray = { $0.hiddenStates.dropLast().last! }
+        let conditioning1 = encodeText(
+            tokenizer: tokenizer, encoder: textEncoder, text: text, negativeText: negative, features: penultimate)
+        let conditioning2 = encodeText(
+            tokenizer: tokenizer2, encoder: textEncoder2, text: text, negativeText: negative, features: penultimate)
         // Emphasis on the per-token states; the pooled output stays unweighted (as in A1111).
-        var conditioning = concatenated(
-            [
-                applyEmphasis(conditioning1.hiddenStates.dropLast().last!, weights1),
-                applyEmphasis(conditioning2.hiddenStates.dropLast().last!, weights2),
-            ],
-            axis: -1)
-        var pooledConditionng = conditioning2.pooledOutput
+        var conditioning = concatenated([conditioning1.states, conditioning2.states], axis: -1)
+        var pooledConditionng = conditioning2.pooled
 
         if imageCount > 1 {
             conditioning = repeated(conditioning, count: imageCount, axis: 0)

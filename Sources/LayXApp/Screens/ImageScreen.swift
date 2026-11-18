@@ -1065,17 +1065,17 @@ struct ImageHistoryGrid: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: columns), spacing: 8) {
-                            if studio.isBusy {
-                                ForEach(0..<max(1, studio.runCount - studio.runDone), id: \.self) { slot in
-                                    PendingThumb(first: slot == 0)
-                                }
-                            }
+                            // Only the image being made; the queued ones are counted in the status line instead.
+                            if studio.isBusy { PendingThumb().transition(.opacity.combined(with: .scale(scale: 0.92))) }
                             ForEach(studio.history) { record in
                                 HistoryThumb(record: record, selected: record.id == studio.selected?.id && !(studio.isBusy && studio.watchingProgress)) { focused = true }
                                     .id(record.id)
                             }
                         }
                         .padding(.horizontal, 12).padding(.bottom, 12)
+                        // A new image slides the others along instead of swapping them in place.
+                        .animation(.spring(response: 0.45, dampingFraction: 0.9), value: studio.history.first?.id)
+                        .animation(.spring(response: 0.45, dampingFraction: 0.9), value: studio.isBusy)
                     }
                     .scrollIndicators(.hidden)
                     // Arrow keys move the selection (← → by one, ↑ ↓ by a row) once the grid has focus.
@@ -1122,49 +1122,44 @@ enum ImageRunText {
     }
 }
 
-/// A slot in the history for an image still being made: the first shows live progress, the rest are queued.
+/// The slot in the history for the image being made, with live progress.
 struct PendingThumb: View {
-    let first: Bool
     @State private var shimmer = false
     private var studio: ImageStudio { AppServices.shared.images }
 
     var body: some View {
         let watching = studio.watchingProgress
         let fraction: Double = {
-            if first, case .generating(_, _, let step, let total) = studio.phase, total > 0 { return Double(step) / Double(total) }
+            if case .generating(_, _, let step, let total) = studio.phase, total > 0 { return Double(step) / Double(total) }
             return 0
         }()
         Color.black.opacity(0.25)
             .aspectRatio(1, contentMode: .fit)
             .overlay {
-                LinearGradient(colors: [LX.C.liveCyan.opacity(0.0), LX.C.liveViolet.opacity(first ? 0.22 : 0.08), LX.C.liveCyan.opacity(0.0)],
+                LinearGradient(colors: [LX.C.liveCyan.opacity(0.0), LX.C.liveViolet.opacity(0.22), LX.C.liveCyan.opacity(0.0)],
                                startPoint: shimmer ? .bottomTrailing : .topLeading, endPoint: shimmer ? .topLeading : .bottomTrailing)
             }
             .overlay {
                 VStack(spacing: 6) {
-                    if first {
-                        ZStack {
-                            Circle().stroke(Color.white.opacity(0.1), lineWidth: 2.5)
-                            Circle().trim(from: 0, to: max(0.02, fraction))
-                                .stroke(LX.C.liveGradient, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                                .rotationEffect(.degrees(-90))
-                        }
-                        .frame(width: 26, height: 26)
-                        .animation(.easeOut(duration: 0.3), value: fraction)
-                        Text(fraction > 0 ? "\(Int(fraction * 100))%" : "Starting")
-                            .font(LX.F.mono(10)).foregroundStyle(LX.C.secondary)
-                    } else {
-                        Image(systemName: "hourglass").font(.system(size: 12)).foregroundStyle(LX.C.tertiary)
+                    ZStack {
+                        Circle().stroke(Color.white.opacity(0.1), lineWidth: 2.5)
+                        Circle().trim(from: 0, to: max(0.02, fraction))
+                            .stroke(LX.C.liveGradient, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
                     }
+                    .frame(width: 26, height: 26)
+                    .animation(.easeOut(duration: 0.3), value: fraction)
+                    Text(fraction > 0 ? "\(Int(fraction * 100))%" : "Starting")
+                        .font(LX.F.mono(10)).foregroundStyle(LX.C.secondary)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: LX.R.lg, style: .continuous)
-                .strokeBorder(first && watching ? AnyShapeStyle(LX.C.liveGradient) : AnyShapeStyle(Color.white.opacity(0.08)),
-                              lineWidth: first && watching ? 2 : 1))
+                .strokeBorder(watching ? AnyShapeStyle(LX.C.liveGradient) : AnyShapeStyle(Color.white.opacity(0.08)),
+                              lineWidth: watching ? 2 : 1))
             .contentShape(Rectangle())
             .onTapGesture { withAnimation(LX.M.hover) { studio.watchProgress() } }
-            .help(first ? "Generating — click to watch" : "Queued")
+            .help("Generating — click to watch")
             .onAppear { withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) { shimmer = true } }
     }
 }

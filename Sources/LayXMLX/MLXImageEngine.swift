@@ -115,8 +115,8 @@ public actor MLXImageEngine: ImageEngine {
                 single.prompts = nil
                 single.negativePrompts = nil
                 if case .sdxl = loaded {} else {
-                    single.prompt = PromptWeighting.stripExplicitWeights(single.prompt)
-                    single.negativePrompt = PromptWeighting.stripExplicitWeights(single.negativePrompt)
+                    single.prompt = PromptWeighting.forLanguageModel(single.prompt)
+                    single.negativePrompt = PromptWeighting.forLanguageModel(single.negativePrompt)
                 }
                 let png: Data
                 switch loaded {

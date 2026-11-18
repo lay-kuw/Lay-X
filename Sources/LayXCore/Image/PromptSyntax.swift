@@ -353,6 +353,14 @@ public enum PromptWeighting {
         text.contains { "()[]\\".contains($0) }
     }
 
+    /// What a model whose text encoder is a language model (FLUX.2 klein, Qwen-Image, Z-Image) is given: no
+    /// explicit weights (see `stripExplicitWeights`), and `BREAK` — a chunk break for CLIP — as a comma.
+    public static func forLanguageModel(_ text: String) -> String {
+        stripExplicitWeights(text)
+            .replacing(#/\s*,?\s*\bBREAK\b\s*,?\s*/#, with: ", ")
+            .replacing(#/^\s*,\s*|\s*,\s*$/#, with: "")
+    }
+
     /// For models whose text encoder is a language model (FLUX.2 klein, Qwen-Image, Z-Image): explicit
     /// `(text:1.3)` weights become `text` and `\(` escapes become `(`; other brackets stay, since they are
     /// usually ordinary punctuation there.

@@ -130,25 +130,65 @@ class CLIPTokenizer {
         return bpeTokens.compactMap { vocabulary[$0] }
     }
 
-    // Truncated to CLIP's context length. The text encoder has a fixed 77-position embedding, so a longer
-    // sequence aborts with `[broadcast_shapes]`. BOS + up to 75 content tokens + EOS = 77.
+    // The text encoder has a fixed 77-position embedding (a longer sequence aborts with `[broadcast_shapes]`):
+    // BOS + up to 75 content tokens + EOS = 77 per chunk.
     static let maxContentTokens = 77 - 2
+    /// Lay X: longer prompts are split into chunks of 75 tokens, each encoded on its own and joined (as in A1111).
+    static let maxChunks = 8
+    /// A full chunk ends after its last comma when that comma is at most this many tokens from the end, so a
+    /// phrase isn't cut in half.
+    static let commaBacktrack = 20
 
-    public func tokenize(text: String) -> [Int32] {
-        tokenize(segments: [WeightedText(text)]).tokens
+    /// One chunk: BOS + content + EOS, with the emphasis of each token (BOS / EOS at 1).
+    public struct Chunk: Sendable {
+        public var tokens: [Int32]
+        public var weights: [Float]
     }
 
-    /// Lay X: token ids with the emphasis of each token (BOS / EOS at 1).
-    public func tokenize(segments: [WeightedText]) -> (tokens: [Int32], weights: [Float]) {
+    /// Lay X: the prompt in chunks of up to 75 tokens. `BREAK` (upper case, a word of its own) starts a new chunk.
+    public func tokenizeChunks(segments: [WeightedText]) -> [Chunk] {
+        let comma = vocabulary[",</w>"]
+        var chunks: [([Int], [Float])] = []
         var ids: [Int] = []
         var weights: [Float] = []
-        for segment in segments {
-            let t = contentTokens(segment.text)
-            ids += t
-            weights += Array(repeating: segment.weight, count: t.count)
+        var lastComma = -1
+        func close() {
+            chunks.append((ids, weights))
+            ids = []
+            weights = []
+            lastComma = -1
         }
-        let n = min(ids.count, Self.maxContentTokens)
-        let tokens = [bosToken] + ids.prefix(n) + [eosToken]
-        return (tokens.map { Int32($0) }, [1] + weights.prefix(n) + [1])
+        for segment in segments {
+            for (n, part) in segment.text.split(separator: #/\bBREAK\b/#,
+                                                 omittingEmptySubsequences: false).enumerated() {
+                if n > 0 { close() }
+                for id in contentTokens(String(part)) {
+                    if ids.count == Self.maxContentTokens {
+                        if lastComma >= 0, ids.count - (lastComma + 1) <= Self.commaBacktrack {
+                            // Carry the words after the comma over to the next chunk.
+                            let restIDs = Array(ids[(lastComma + 1)...]), restWeights = Array(weights[(lastComma + 1)...])
+                            ids.removeSubrange((lastComma + 1)...)
+                            weights.removeSubrange((lastComma + 1)...)
+                            close()
+                            ids = restIDs
+                            weights = restWeights
+                        } else {
+                            close()
+                        }
+                    }
+                    if id == comma { lastComma = ids.count }
+                    ids.append(id)
+                    weights.append(segment.weight)
+                }
+            }
+        }
+        if !ids.isEmpty || chunks.isEmpty { close() }
+        return chunks.prefix(Self.maxChunks).map { ids, weights in
+            Chunk(tokens: ([bosToken] + ids + [eosToken]).map { Int32($0) }, weights: [1] + weights + [1])
+        }
+    }
+
+    public func tokenize(text: String) -> [Int32] {
+        tokenizeChunks(segments: [WeightedText(text)])[0].tokens
     }
 }

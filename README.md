@@ -148,9 +148,11 @@ Prompts understand **Dynamic Prompts** and **emphasis**: 🎲
 | `{2$$a\|b\|c}` · `{1-3$$a\|b\|c}` · `{2$$ and $$a\|b\|c}` | several distinct options, joined with `, ` (or your own separator) |
 | `__hair__` | a random line of `hair.txt` in the wildcards folder (`__style/anime__` for subfolders) |
 | `(word)` · `((word))` · `[word]` · `(word:1.4)` | emphasis ×1.1 · ×1.21 · ÷1.1 · ×1.4 — SDXL models; the others just drop explicit `:1.4` weights |
+| `BREAK` | starts a new 75‑token chunk (SDXL); a comma for the other models |
 | `\{` `\}` `\|` `\(` `\)` | literal characters |
 
-The history keeps each image's expanded prompt.
+Long prompts are fine: SDXL reads them in chunks of 75 tokens (up to 8, split at a nearby comma), the other
+models take up to 512 tokens. The history keeps each image's expanded prompt.
 
 Chat and images share one Mac politely: they never use the GPU at the same time, and if memory is tight Lay X
 unloads whichever model is idle (and tells you) so the other one fits. ✨

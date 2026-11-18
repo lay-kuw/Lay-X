@@ -90,5 +90,8 @@ struct PromptWeightingTests {
         #expect(PromptWeighting.stripExplicitWeights("a sign (OPEN), (cat:1.3)") == "a sign (OPEN), cat")
         #expect(PromptWeighting.stripExplicitWeights(#"\(x\) ((y:1.2))"#) == "(x) (y)")
         #expect(PromptWeighting.stripExplicitWeights("plain") == "plain")
+        #expect(PromptWeighting.forLanguageModel("a cat BREAK (red:1.2) sky") == "a cat, red sky")
+        #expect(PromptWeighting.forLanguageModel("a cat, BREAK, sky BREAK") == "a cat, sky")
+        #expect(PromptWeighting.forLanguageModel("BREAKFAST") == "BREAKFAST")
     }
 }
