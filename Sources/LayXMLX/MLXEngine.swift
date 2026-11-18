@@ -234,6 +234,7 @@ public actor MLXEngine: InferenceEngine {
 
         let reuseCount = reused
         let snapshotPlan = plan
+        let promptTail = Array(promptIDs.suffix(8))
         let h: GenerationHandle
         do {
             h = try await container.perform(nonSendable: (lmInput, startCache)) { context, values in
@@ -263,8 +264,7 @@ public actor MLXEngine: InferenceEngine {
                     components: components)
                 // Templates such as Qwen3.5/3.6 end the prompt with "<think>\n" when thinking is on, so the
                 // model's output starts inside the reasoning block without an opening tag.
-                let ids = tokens.asArray(Int.self)
-                let tail = context.tokenizer.decode(tokenIds: Array(ids.suffix(8)))
+                let tail = context.tokenizer.decode(tokenIds: promptTail)
                 let opensThinking = tail.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("<think>")
                 let (s, t) = generateTask(
                     promptTokenCount: iteratorInput.text.tokens.size, modelConfiguration: context.configuration,

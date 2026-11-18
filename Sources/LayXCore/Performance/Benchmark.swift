@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Fixed, repeatable benchmark configuration. Two results are comparable only if their `comparisonKey`s match.
@@ -56,6 +57,7 @@ public enum BenchmarkPrompt {
 public struct BenchmarkSample: Sendable, Codable, Hashable {
     public var promptTarget: Int
     public var metrics: GenerationMetrics
+    public var outputSHA256: String? = nil
 }
 
 public struct BenchmarkPoint: Sendable, Codable, Hashable, Identifiable {
@@ -161,6 +163,7 @@ public struct BenchmarkProgress: Sendable, Equatable {
 /// concurrent with — chat, Work and API generations. Cancellable; a cancelled run keeps its finished samples.
 public enum BenchmarkRunner {
     public static func run(_ config: BenchmarkConfig, coordinator: InferenceCoordinator, engineName: String,
+                           captureOutputDigest: Bool = false,
                            progress: @escaping @Sendable (BenchmarkProgress) -> Void) async throws -> BenchmarkResult {
         guard let model = await coordinator.snapshot.model.loadedModel else { throw InferenceError.noModelLoaded }
         var result = BenchmarkResult(
@@ -181,11 +184,18 @@ public enum BenchmarkRunner {
                     parameters: GenerationParameters(temperature: config.temperature, topP: 1, maxTokens: config.generateTokens, seed: config.seed),
                     client: .benchmark, thinking: false)
                 var metrics: GenerationMetrics?
+                var output: SHA256? = captureOutputDigest && !warmup ? SHA256() : nil
                 for try await event in coordinator.generate(request) {
-                    if case .finished(let m) = event { metrics = m }
+                    switch event {
+                    case .text(let text): output?.update(data: Data(text.utf8))
+                    case .finished(let m): metrics = m
+                    }
                 }
                 if Task.isCancelled { break }
-                if let m = metrics, !warmup { result.samples.append(BenchmarkSample(promptTarget: target, metrics: m)) }
+                if let m = metrics, !warmup {
+                    result.samples.append(BenchmarkSample(
+                        promptTarget: target, metrics: m, outputSHA256: output.map { $0.finalize().map { String(format: "%02x", $0) }.joined() }))
+                }
                 step += 1
             }
         }

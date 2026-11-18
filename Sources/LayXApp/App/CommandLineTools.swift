@@ -97,8 +97,13 @@ nonisolated enum CommandLineTools {
             try await WorkCheck.run(model: model)
         case "--benchmark":
             // LayX --benchmark <model> [quick|sweep] — real MLX; result saved to the app database (synthetic prompt only).
+            // LayX --benchmark <model> decode [off|4|8] — JSON on stdout for A/B comparisons; nothing is saved.
             guard args.count >= 3, let id = ModelRepoID(args[2]), let model = store.installedModel(id) else {
                 throw ModelStoreError.notInstalled(args.dropFirst(2).first ?? "")
+            }
+            if args.dropFirst(3).first == "decode" {
+                try await decodeBenchmark(model: model, kv: args.dropFirst(4).first ?? "off")
+                return
             }
             let config: BenchmarkConfig = args.count >= 4 && args[3] == "sweep" ? .contextSweep : .quick
             let coordinator = InferenceCoordinator(engine: MLXEngine())
@@ -429,6 +434,28 @@ nonisolated enum CommandLineTools {
         default:
             break
         }
+    }
+
+    private static func decodeBenchmark(model: InstalledModel, kv: String) async throws {
+        guard ["off", "4", "8"].contains(kv) else {
+            throw InferenceError.generationFailed("decode benchmark KV must be off, 4, or 8")
+        }
+        let coordinator = InferenceCoordinator(engine: MLXEngine())
+        await coordinator.configure(EngineSettings(kvBits: Int(kv)))
+        try await coordinator.load(model.reference)
+
+        let environment = ProcessInfo.processInfo.environment
+        let overrides = ["MLX_MAX_MB_PER_BUFFER", "MLX_MAX_OPS_PER_BUFFER", "MLX_METAL_FAST_SYNCH"]
+            .compactMap { key in environment[key].map { "\(key)=\($0)" } }
+        let engine = (["MLX", "KV=\(kv)"] + overrides)
+            .joined(separator: " · ")
+        let config = BenchmarkConfig(promptTokens: [128, 2048, 8192], generateTokens: 256,
+                                     iterations: 5, warmupIterations: 2)
+        let result = try await BenchmarkRunner.run(
+            config, coordinator: coordinator, engineName: engine, captureOutputDigest: true) { _ in }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(result), as: UTF8.self))
     }
 }
 #endif

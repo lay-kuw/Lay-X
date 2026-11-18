@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import LayXCore
 #if canImport(LayXMLX)
+import Darwin
 import LayXMLX
 #endif
 
@@ -10,6 +11,9 @@ import LayXMLX
 enum LayXMain {
     static func main() {
         #if canImport(LayXMLX)
+        // MLX reads this once when it creates the Metal device. Batching more work
+        // per command buffer reduces submissions during quantized text decoding.
+        setenv("MLX_MAX_MB_PER_BUFFER", "256", 0)
         if CommandLineTools.handle(CommandLine.arguments) { return }
         #endif
         LayXApplication.main()

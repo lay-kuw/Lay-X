@@ -98,6 +98,22 @@ import Testing
         }
     }
 
+    @Test func outputDigestIsIndependentOfChunkBoundaries() async throws {
+        let engine = ScriptedEngine(tokens: ["a", "bc"])
+        let coordinator = InferenceCoordinator(engine: engine)
+        try await coordinator.load(ModelReference(id: "t/m", directory: URL(fileURLWithPath: "/tmp")))
+        let config = BenchmarkConfig(promptTokens: [128], iterations: 1, warmupIterations: 0)
+
+        let first = try await BenchmarkRunner.run(
+            config, coordinator: coordinator, engineName: "scripted", captureOutputDigest: true) { _ in }
+        await engine.setTokens(["ab", "c"])
+        let second = try await BenchmarkRunner.run(
+            config, coordinator: coordinator, engineName: "scripted", captureOutputDigest: true) { _ in }
+        let digest = try #require(first.samples.first?.outputSHA256)
+        #expect(digest == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")  // SHA-256("abc")
+        #expect(second.samples.first?.outputSHA256 == digest)
+    }
+
     @Test func hardwareInfoIsPopulated() {
         let h = HardwareInfo.current
         #expect(h.memoryBytes > 0)

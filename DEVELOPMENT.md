@@ -48,6 +48,29 @@ $B --image-check  [image-model] [text-model]        # download if needed, genera
 $B --search qwen3 ; $B --list-models ; $B --keychain-check
 ```
 
+Lay X sets MLX's Metal command-buffer size threshold to 256 MB before GPU initialization.
+To compare with MLX's original threshold on the same machine, set `MLX_MAX_MB_PER_BUFFER`
+explicitly before launching the binary. MLX 0.32.3 uses 50 MB on Max and Ultra GPUs and
+40 MB on base and Pro GPUs. Use the same model, prompt, and output length in both runs
+and compare **decode tok/s** separately from time to first token.
+
+### Reproducing single-stream decode measurements
+
+```bash
+B=build/LayX.app/Contents/MacOS/LayX
+MODEL=mlx-community/Qwen3.6-35B-A3B-OptiQ-4bit
+MLX_MAX_MB_PER_BUFFER=256 "$B" --benchmark "$MODEL" decode off > baseline.json
+MLX_MAX_MB_PER_BUFFER=256 MLX_MAX_OPS_PER_BUFFER=96 "$B" --benchmark "$MODEL" decode off > ops96.json
+MLX_MAX_MB_PER_BUFFER=256 "$B" --benchmark "$MODEL" decode 8 > kv8.json
+```
+
+Use the same release build and installed checkpoint for each run. The decode preset uses
+three synthetic prompt sizes, two warmups, five measured runs per size, and a 256-token
+output budget. It disables prompt-cache reuse and thinking, uses greedy sampling, and
+writes JSON to stdout. Compare actual prompt and output token counts, stop reasons,
+output SHA-256 digests, and median decode speeds at each context size. Run the arms
+sequentially and repeat in reverse order when the size of an improvement is uncertain.
+
 ## App icon
 Source: `Sources/LayXIcon/LX.png` (square, ≥ 1024 px). `scripts/build-app.sh` renders `AppIcon.icns`
 (16–1024 px, @1x/@2x) with `sips` + `iconutil` into the bundle.
